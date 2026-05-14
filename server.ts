@@ -1,4 +1,5 @@
 import express from "express";
+import cors from "cors";
 import { createServer as createViteServer } from "vite";
 import path from "path";
 import { fileURLToPath } from "url";
@@ -13,8 +14,9 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const app = express();
-const PORT = 3000;
+const PORT = process.env.PORT || 3000;
 
+app.use(cors());
 app.use(express.json());
 
 // --- Database Setup (SQLite for Metadata) ---
@@ -84,24 +86,38 @@ try {
   // Column might already exist
 }
 
-const activeNodes = db.prepare(
-  "SELECT id, xray_active_since FROM nodes WHERE xray_active_since IS NOT NULL"
-).all();
+const activeNodes = db
+  .prepare(
+    "SELECT id, xray_active_since FROM nodes WHERE xray_active_since IS NOT NULL"
+  )
+  .all();
 
 activeNodes.forEach((n: any) => {
-  console.log(`Recovered active session for ${n.id} since ${n.xray_active_since}`);
+  console.log(
+    `Recovered active session for ${n.id} since ${n.xray_active_since}`
+  );
 });
 
 // --- Telegram Bot Setup ---
 let bot: TelegramBot | null = null;
 let currentBotToken = "";
 
-const sendAlert = async (message: string, nodeId?: string, type: string = 'alert') => {
-  const chatId = db.prepare("SELECT value FROM config WHERE key = 'telegram_chat_id'").get()?.value;
-  const token = db.prepare("SELECT value FROM config WHERE key = 'telegram_bot_token'").get()?.value;
-  
+const sendAlert = async (
+  message: string,
+  nodeId?: string,
+  type: string = "alert"
+) => {
+  const chatId = db
+    .prepare("SELECT value FROM config WHERE key = 'telegram_chat_id'")
+    .get()?.value;
+  const token = db
+    .prepare("SELECT value FROM config WHERE key = 'telegram_bot_token'")
+    .get()?.value;
+
   // Save to notifications table for frontend
-  db.prepare("INSERT INTO notifications (node_id, message, type) VALUES (?, ?, ?)").run(nodeId || null, message, type);
+  db.prepare(
+    "INSERT INTO notifications (node_id, message, type) VALUES (?, ?, ?)"
+  ).run(nodeId || null, message, type);
 
   if (token && chatId) {
     try {
@@ -132,14 +148,19 @@ mqttClient.on("connect", () => {
 });
 
 mqttClient.on("error", (err) => {
-  if (!err.message.includes("connack timeout") && !err.message.includes("ECONNREFUSED")) {
+  if (
+    !err.message.includes("connack timeout") &&
+    !err.message.includes("ECONNREFUSED")
+  ) {
     console.error("MQTT Client Error:", err.message);
   }
 });
 
 mqttClient.on("offline", () => {
   if (!(mqttClient as any)._offlineLogged) {
-    console.log("⚠️  MQTT Client Offline. Note: AI Studio runs in the cloud. If your broker is on a local IP (e.g., 192.168.x.x), it cannot connect unless you expose it via ngrok or use a public broker.");
+    console.log(
+      "⚠️  MQTT Client Offline. Note: AI Studio runs in the cloud. If your broker is on a local IP (e.g., 192.168.x.x), it cannot connect unless you expose it via ngrok or use a public broker."
+    );
     (mqttClient as any)._offlineLogged = true;
   }
 });
@@ -156,26 +177,39 @@ mqttClient.on("message", (topic, message) => {
 });
 
 const handleHeartbeat = (nodeId: string, payload: any) => {
-  db.prepare("UPDATE nodes SET last_heartbeat = CURRENT_TIMESTAMP, status = 'online', alert_offline_sent = 0, alert_safety_sent = 0 WHERE id = ?").run(nodeId);
+  db.prepare(
+    "UPDATE nodes SET last_heartbeat = CURRENT_TIMESTAMP, status = 'online', alert_offline_sent = 0, alert_safety_sent = 0 WHERE id = ?"
+  ).run(nodeId);
 };
 
 const handleEvent = (nodeId: string, payload: any) => {
-  if (payload.event_type === 'xray_status') {
+  if (payload.event_type === "xray_status") {
     if (payload.is_active) {
-      db.prepare("UPDATE nodes SET xray_active_since = CURRENT_TIMESTAMP WHERE id = ?").run(nodeId);
+      db.prepare(
+        "UPDATE nodes SET xray_active_since = CURRENT_TIMESTAMP WHERE id = ?"
+      ).run(nodeId);
     } else {
-      const row = db.prepare("SELECT xray_active_since FROM nodes WHERE id = ?").get(nodeId) as any;
+      const row = db
+        .prepare("SELECT xray_active_since FROM nodes WHERE id = ?")
+        .get(nodeId) as any;
 
       if (row?.xray_active_since) {
         const start = new Date(row.xray_active_since).getTime();
         const end = new Date().getTime();
         const minutes = (end - start) / 60000;
 
-        db.prepare("INSERT INTO telemetry (device_id, on_time, off_time, duration_minutes) VALUES (?, ?, ?, ?)").run(
-          nodeId, new Date(start).toISOString(), new Date(end).toISOString(), minutes
+        db.prepare(
+          "INSERT INTO telemetry (device_id, on_time, off_time, duration_minutes) VALUES (?, ?, ?, ?)"
+        ).run(
+          nodeId,
+          new Date(start).toISOString(),
+          new Date(end).toISOString(),
+          minutes
         );
 
-        db.prepare("UPDATE nodes SET xray_active_since = NULL WHERE id = ?").run(nodeId);
+        db.prepare(
+          "UPDATE nodes SET xray_active_since = NULL WHERE id = ?"
+        ).run(nodeId);
       }
     }
   }
@@ -185,9 +219,14 @@ const handleEvent = (nodeId: string, payload: any) => {
 setInterval(() => {
   const now = new Date();
   const currentHour = now.getHours();
-  
-  const config = Object.fromEntries(db.prepare("SELECT key, value FROM config").all().map(c => [c.key, c.value]));
-  
+
+  const config = Object.fromEntries(
+    db
+      .prepare("SELECT key, value FROM config")
+      .all()
+      .map((c) => [c.key, c.value])
+  );
+
   const shiftStart = parseInt(config.shift_start_hour || "6");
   const shiftEnd = parseInt(config.shift_end_hour || "22");
   const watchdogTimeout = parseInt(config.watchdog_timeout_min || "6");
@@ -197,31 +236,47 @@ setInterval(() => {
   const isOnShift = currentHour >= shiftStart && currentHour < shiftEnd;
 
   // 1. Check for Offline Nodes
-  const offlineNodes = db.prepare(`
+  const offlineNodes = db
+    .prepare(
+      `
     SELECT id, alias, alert_offline_sent FROM nodes 
     WHERE status = 'online' 
     AND datetime(last_heartbeat, '+${watchdogTimeout} minutes') < CURRENT_TIMESTAMP
-  `).all();
+  `
+    )
+    .all();
 
   offlineNodes.forEach((node: any) => {
     db.prepare("UPDATE nodes SET status = 'offline' WHERE id = ?").run(node.id);
     if (isOnShift && node.alert_offline_sent === 0) {
-      sendAlert(`Device Offline: ${node.alias || node.id}`, node.id, 'offline');
-      db.prepare("UPDATE nodes SET alert_offline_sent = 1 WHERE id = ?").run(node.id);
+      sendAlert(`Device Offline: ${node.alias || node.id}`, node.id, "offline");
+      db.prepare("UPDATE nodes SET alert_offline_sent = 1 WHERE id = ?").run(
+        node.id
+      );
     }
   });
 
   // 2. Check for Safety Alerts (X-Ray active too long)
-  const safetyViolations = db.prepare(`
+  const safetyViolations = db
+    .prepare(
+      `
     SELECT id, alias, alert_safety_sent FROM nodes 
     WHERE xray_active_since IS NOT NULL 
     AND datetime(xray_active_since, '+${safetyTimeout} minutes') < CURRENT_TIMESTAMP
-  `).all();
+  `
+    )
+    .all();
 
   safetyViolations.forEach((node: any) => {
     if (isOnShift && node.alert_safety_sent === 0) {
-      sendAlert(`SAFETY ALERT: X-Ray active for > ${safetyTimeout} mins on ${node.alias || node.id}`, node.id, 'safety');
-      db.prepare("UPDATE nodes SET alert_safety_sent = 1 WHERE id = ?").run(node.id);
+      sendAlert(
+        `SAFETY ALERT: X-Ray active for > ${safetyTimeout} mins on ${node.alias || node.id}`,
+        node.id,
+        "safety"
+      );
+      db.prepare("UPDATE nodes SET alert_safety_sent = 1 WHERE id = ?").run(
+        node.id
+      );
     }
   });
 }, 60000);
@@ -229,9 +284,13 @@ setInterval(() => {
 // --- API Routes ---
 
 // RBAC Middleware
-const requireAdmin = (req: express.Request, res: express.Response, next: express.NextFunction) => {
-  const accessLevel = req.headers['x-access-level'];
-  if (accessLevel !== 'Admin') {
+const requireAdmin = (
+  req: express.Request,
+  res: express.Response,
+  next: express.NextFunction
+) => {
+  const accessLevel = req.headers["x-access-level"];
+  if (accessLevel !== "Admin") {
     return res.status(403).json({ error: "Forbidden: Admin access required" });
   }
   next();
@@ -249,17 +308,21 @@ app.get("/api/nodes", (req, res) => {
 
 app.post("/api/nodes/:id/alias", (req, res) => {
   const { alias } = req.body;
-  db.prepare("UPDATE nodes SET alias = ? WHERE id = ?").run(alias, req.params.id);
+  db.prepare("UPDATE nodes SET alias = ? WHERE id = ?").run(
+    alias,
+    req.params.id
+  );
   res.json({ success: true });
 });
 
 app.post("/api/nodes", requireAdmin, (req, res) => {
   const { id, alias } = req.body;
   if (!id) return res.status(400).json({ error: "ID is required" });
-  
+
   try {
-    db.prepare("INSERT INTO nodes (id, alias, status, last_heartbeat, lifetime_anchor_date) VALUES (?, ?, 'offline', datetime('now'), datetime('now'))")
-      .run(id, alias || id);
+    db.prepare(
+      "INSERT INTO nodes (id, alias, status, last_heartbeat, lifetime_anchor_date) VALUES (?, ?, 'offline', datetime('now'), datetime('now'))"
+    ).run(id, alias || id);
     res.json({ success: true });
   } catch (err) {
     res.status(400).json({ error: "Node ID already exists" });
@@ -279,8 +342,10 @@ app.get("/api/nodes/:id/telemetry", async (req, res) => {
   const { range = "7d" } = req.query;
 
   try {
-    const days = range === '30d' ? 30 : 7;
-    const records = db.prepare(`
+    const days = range === "30d" ? 30 : 7;
+    const records = db
+      .prepare(
+        `
       SELECT 
         date(off_time) as date,
         SUM(duration_minutes) / 60.0 as hours
@@ -289,26 +354,28 @@ app.get("/api/nodes/:id/telemetry", async (req, res) => {
         AND off_time >= datetime('now', '-' || ? || ' days')
       GROUP BY date(off_time)
       ORDER BY date(off_time) ASC
-    `).all(id, days) as any[];
+    `
+      )
+      .all(id, days) as any[];
 
     const datesMap = new Map();
     for (let i = days - 1; i >= 0; i--) {
-        const d = new Date();
-        d.setDate(d.getDate() - i);
-        const ymd = d.toISOString().split('T')[0];
-        datesMap.set(ymd, 0);
+      const d = new Date();
+      d.setDate(d.getDate() - i);
+      const ymd = d.toISOString().split("T")[0];
+      datesMap.set(ymd, 0);
     }
     for (const row of records) {
-        if (row.date) datesMap.set(row.date, row.hours);
+      if (row.date) datesMap.set(row.date, row.hours);
     }
-    
+
     const result = Array.from(datesMap.entries()).map(([dateStr, hours]) => {
-        const d = new Date(dateStr);
-        return {
-           rawDate: dateStr,
-           date: d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
-           hours
-        }
+      const d = new Date(dateStr);
+      return {
+        rawDate: dateStr,
+        date: d.toLocaleDateString("en-US", { month: "short", day: "numeric" }),
+        hours,
+      };
     });
 
     res.json(result);
@@ -322,12 +389,14 @@ app.get("/api/nodes/:id/telemetry/details", async (req, res) => {
   const { id } = req.params;
   const { date } = req.query; // Expected format: YYYY-MM-DD or similar
 
-  if (!date || typeof date !== 'string') {
+  if (!date || typeof date !== "string") {
     return res.status(400).json({ error: "Date is required" });
   }
 
   try {
-    const records = db.prepare(`
+    const records = db
+      .prepare(
+        `
       SELECT 
         on_time as onTime,
         off_time as offTime,
@@ -336,10 +405,12 @@ app.get("/api/nodes/:id/telemetry/details", async (req, res) => {
       WHERE device_id = ?
         AND date(off_time) = ?
       ORDER BY off_time ASC
-    `).all(id, date);
+    `
+      )
+      .all(id, date);
 
     res.json(records);
-  } catch(err: any) {
+  } catch (err: any) {
     console.error("SQLite telemetry details query failed:", err.message);
     res.status(500).json({ error: "Query failed" });
   }
@@ -349,32 +420,42 @@ app.get("/api/nodes/:id/lifetime-hours", async (req, res) => {
   const { id } = req.params;
 
   try {
-     const row = db.prepare(`
+    const row = db
+      .prepare(
+        `
       SELECT SUM(duration_minutes) / 60.0 as hours
       FROM telemetry
       WHERE device_id = ?
-    `).get(id) as any;
+    `
+      )
+      .get(id) as any;
     res.json({ hours: row?.hours || 0 });
-  } catch(err:any) {
+  } catch (err: any) {
     res.json({ hours: 0 });
   }
 });
 
 app.get("/api/nodes/:id/logs", (req, res) => {
-  const logs = db.prepare("SELECT * FROM maintenance_logs WHERE node_id = ? ORDER BY created_at DESC").all(req.params.id);
+  const logs = db
+    .prepare(
+      "SELECT * FROM maintenance_logs WHERE node_id = ? ORDER BY created_at DESC"
+    )
+    .all(req.params.id);
   res.json(logs);
 });
 
 app.post("/api/nodes/:id/logs", requireAdmin, (req, res) => {
   const { technician_name, event_type, notes } = req.body;
-  db.prepare("INSERT INTO maintenance_logs (node_id, technician_name, event_type, notes) VALUES (?, ?, ?, ?)").run(
-    req.params.id, technician_name, event_type, notes
-  );
+  db.prepare(
+    "INSERT INTO maintenance_logs (node_id, technician_name, event_type, notes) VALUES (?, ?, ?, ?)"
+  ).run(req.params.id, technician_name, event_type, notes);
   res.json({ success: true });
 });
 
 app.post("/api/nodes/:id/reset-lifetime", requireAdmin, (req, res) => {
-  db.prepare("UPDATE nodes SET lifetime_anchor_date = CURRENT_TIMESTAMP WHERE id = ?").run(req.params.id);
+  db.prepare(
+    "UPDATE nodes SET lifetime_anchor_date = CURRENT_TIMESTAMP WHERE id = ?"
+  ).run(req.params.id);
   res.json({ success: true });
 });
 
@@ -383,10 +464,30 @@ app.get("/api/config", requireAdmin, (req, res) => {
   res.json(config);
 });
 
+app.get("/api/database-dump", requireAdmin, (req, res) => {
+  try {
+    const tables = db
+      .prepare(
+        "SELECT name FROM sqlite_schema WHERE type='table' AND name NOT LIKE 'sqlite_%'"
+      )
+      .all() as { name: string }[];
+    const result: Record<string, any[]> = {};
+    for (const t of tables) {
+      result[t.name] = db.prepare(`SELECT * FROM ${t.name}`).all();
+    }
+    res.json(result);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.post("/api/config", requireAdmin, (req, res) => {
   const { key, value } = req.body;
   if (key && value) {
-    db.prepare("INSERT OR REPLACE INTO config (key, value) VALUES (?, ?)").run(key, value);
+    db.prepare("INSERT OR REPLACE INTO config (key, value) VALUES (?, ?)").run(
+      key,
+      value
+    );
     res.json({ success: true });
   } else {
     res.status(400).json({ error: "Missing key or value" });
@@ -395,7 +496,9 @@ app.post("/api/config", requireAdmin, (req, res) => {
 
 app.get("/api/notifications", (req, res) => {
   try {
-    const notifications = db.prepare("SELECT * FROM notifications ORDER BY created_at DESC LIMIT 50").all();
+    const notifications = db
+      .prepare("SELECT * FROM notifications ORDER BY created_at DESC LIMIT 50")
+      .all();
     res.json(notifications);
   } catch (err: any) {
     console.error("Error fetching notifications:", err);
@@ -404,7 +507,9 @@ app.get("/api/notifications", (req, res) => {
 });
 
 app.post("/api/notifications/:id/read", (req, res) => {
-  db.prepare("UPDATE notifications SET is_read = 1 WHERE id = ?").run(req.params.id);
+  db.prepare("UPDATE notifications SET is_read = 1 WHERE id = ?").run(
+    req.params.id
+  );
   res.json({ success: true });
 });
 
@@ -423,25 +528,34 @@ if (process.env.NODE_ENV !== "production") {
   });
 }
 
-app.use((err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {
-  console.error("Express error:", err);
-  if (!res.headersSent) {
-    res.status(err.status || 500).json({ error: err.message || "Internal Server Error" });
+app.use(
+  (
+    err: any,
+    req: express.Request,
+    res: express.Response,
+    next: express.NextFunction
+  ) => {
+    console.error("Express error:", err);
+    if (!res.headersSent) {
+      res
+        .status(err.status || 500)
+        .json({ error: err.message || "Internal Server Error" });
+    }
   }
-});
+);
 
 app.listen(PORT, "0.0.0.0", () => {
   console.log(`Server running on http://localhost:${PORT}`);
 });
 
-process.on('SIGINT', () => {
+process.on("SIGINT", () => {
   process.exit();
 });
 
-process.on('uncaughtException', (err) => {
-  console.error('Uncaught Exception:', err.message);
+process.on("uncaughtException", (err) => {
+  console.error("Uncaught Exception:", err.message);
 });
 
-process.on('unhandledRejection', (reason, promise) => {
-  console.error('Unhandled Rejection at:', promise, 'reason:', reason);
+process.on("unhandledRejection", (reason, promise) => {
+  console.error("Unhandled Rejection at:", promise, "reason:", reason);
 });
