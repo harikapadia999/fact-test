@@ -1,0 +1,20 @@
+version: '3.8'
+
+services:
+  factory-dashboard:
+    build: .
+    container_name: factory-dashboard
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=production
+      - MQTT_BROKER_URL=mqtt://host.docker.internal:1883
+      # Add database/telegram variables below or use an env_file
+    env_file:
+      - .env
+    volumes:
+      # Persist SQLite database outside the container
+      - ./data:/app/data
+      # Map the database file properly so we don't lose data on container restart
+      - ./factory.db:/app/factory.db

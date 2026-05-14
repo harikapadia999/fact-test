@@ -1,0 +1,5 @@
+{
+  "name": "Factory Data Board & Telemetry System",
+  "description": "Industrial IoT dashboard for monitoring factory equipment telemetry, health, and maintenance logs.",
+  "requestFramePermissions": []
+}
