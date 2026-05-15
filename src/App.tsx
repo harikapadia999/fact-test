@@ -28,6 +28,11 @@ import {
 } from "recharts";
 import { motion, AnimatePresence } from "motion/react";
 import { cn } from "./lib/utils";
+import { useIsMobile } from "../hooks/use-mobile";
+import { io } from "socket.io-client";
+
+const baseUrl = import.meta.env.VITE_API_URL || "";
+const socket = io(baseUrl || window.location.origin);
 
 // --- Types ---
 interface Node {
@@ -92,6 +97,7 @@ const fetchJson = async (endpoint: string, options?: RequestInit) => {
 };
 
 export default function App() {
+  const isMobile = useIsMobile();
   const [nodes, setNodes] = useState<Node[]>([]);
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [telemetry, setTelemetry] = useState<TelemetryData[]>([]);
@@ -125,7 +131,7 @@ export default function App() {
   const [lifetimeHours, setLifetimeHours] = useState<number>(0);
   const [showDetailedReport, setShowDetailedReport] = useState(false);
   const [detailedReportDate, setDetailedReportDate] = useState<string>(
-    new Date().toISOString().split("T")[0]
+    new Date(Date.now() + 5.5 * 3600000).toISOString().split("T")[0]
   );
   const [detailedReportData, setDetailedReportData] = useState<
     TelemetryDetails[]
@@ -199,12 +205,61 @@ export default function App() {
   useEffect(() => {
     fetchNodes();
     fetchNotifications();
-    const interval = setInterval(() => {
+
+    socket.on("status_update", (data) => {
+      setNodes((prev) =>
+        prev.map((n) =>
+          n.id === data.nodeId
+            ? {
+                ...n,
+                status: data.status,
+                last_heartbeat: new Date().toISOString(),
+              }
+            : n
+        )
+      );
+    });
+
+    socket.on("xray_status_update", (data) => {
+      setNodes((prev) =>
+        prev.map((n) =>
+          n.id === data.nodeId
+            ? {
+                ...n,
+                xray_active_since: data.isActive
+                  ? new Date().toISOString()
+                  : null,
+              }
+            : n
+        )
+      );
+    });
+
+    socket.on("telemetry_update", (data) => {
+      if (selectedNodeId === data.nodeId) {
+        fetchTelemetry(data.nodeId);
+        fetchJson(`/api/nodes/${data.nodeId}/lifetime-hours`)
+          .then((res) => setLifetimeHours(res.hours || 0))
+          .catch(console.error);
+      }
+    });
+
+    socket.on("new_node", () => {
       fetchNodes();
+    });
+
+    socket.on("new_notification", () => {
       fetchNotifications();
-    }, 10000); // Refresh every 10s
-    return () => clearInterval(interval);
-  }, []);
+    });
+
+    return () => {
+      socket.off("status_update");
+      socket.off("xray_status_update");
+      socket.off("telemetry_update");
+      socket.off("new_node");
+      socket.off("new_notification");
+    };
+  }, [selectedNodeId, analyticsView]);
 
   useEffect(() => {
     if (selectedNodeId) {
@@ -213,6 +268,16 @@ export default function App() {
       fetchJson(`/api/nodes/${selectedNodeId}/lifetime-hours`)
         .then((data) => setLifetimeHours(data.hours || 0))
         .catch(console.error);
+
+      // Periodically refresh telemetry to show live ticking updates when machine is active
+      const interval = setInterval(() => {
+        fetchTelemetry(selectedNodeId);
+        fetchJson(`/api/nodes/${selectedNodeId}/lifetime-hours`)
+          .then((data) => setLifetimeHours(data.hours || 0))
+          .catch(console.error);
+      }, 10000);
+
+      return () => clearInterval(interval);
     }
   }, [selectedNodeId, analyticsView]);
 
@@ -260,7 +325,8 @@ export default function App() {
         rawDate:
           d.rawDate ||
           new Date(
-            Date.now() -
+            Date.now() +
+              5.5 * 3600000 -
               (telemetryData.length - 1 - telemetryData.indexOf(d)) *
                 24 *
                 60 *
@@ -392,10 +458,36 @@ export default function App() {
     }
   };
 
-  if (loading || !selectedNode) {
+  // Old block removed
+
+  if (loading) {
     return (
-      <div className="min-h-screen bg-[#f4f4f5] flex items-center justify-center">
-        <RefreshCw className="w-8 h-8 text-blue-500 animate-spin" />
+      <div className="min-h-screen bg-[#f4f4f5] flex items-center justify-center p-4">
+        <div className="animate-pulse text-slate-500 font-medium">
+          Loading Factory System...
+        </div>
+      </div>
+    );
+  }
+
+  if (!selectedNode) {
+    return (
+      <div className="min-h-screen bg-[#f4f4f5] flex flex-col items-center justify-center p-4">
+        <div className="bg-white p-8 rounded-2xl shadow-xl flex flex-col items-center max-w-md text-center">
+          <h2 className="text-2xl font-bold text-slate-800 mb-2">
+            No Devices Available
+          </h2>
+          <p className="text-slate-500 mb-6">
+            Could not connect to the backend system, or no factory nodes are
+            provisioned. Please check your connection or setup VITE_API_URL.
+          </p>
+          <button
+            onClick={() => fetchNodes()}
+            className="px-6 py-3 bg-blue-600 text-white rounded-xl font-bold hover:bg-blue-700 transition"
+          >
+            Retry Connection
+          </button>
+        </div>
       </div>
     );
   }
@@ -406,28 +498,31 @@ export default function App() {
     month: "short",
     day: "2-digit",
     year: "numeric",
+    timeZone: "Asia/Kolkata",
   });
 
   return (
-    <div className="min-h-screen bg-[#f4f4f5] flex items-center justify-center p-4 md:p-8 font-sans">
+    <div className="min-h-screen bg-[#f4f4f5] flex items-center justify-center p-0 md:p-8 font-sans">
       {/* Main Container Card */}
-      <div className="w-full max-w-5xl bg-white rounded-2xl shadow-xl overflow-hidden flex flex-col border border-slate-200">
+      <div className="w-full max-w-7xl bg-white rounded-none md:rounded-2xl shadow-xl overflow-hidden flex flex-col border-0 md:border md:border-slate-200 min-h-screen md:min-h-[85vh]">
         {/* Header Section */}
-        <div className="px-8 py-6 flex items-center justify-between border-b border-slate-100">
-          <div className="flex items-center gap-4">
-            <button
-              onClick={() => setIsSidebarCollapsed(!isSidebarCollapsed)}
-              className="p-2 hover:bg-slate-100 rounded-lg transition-colors text-slate-500 mr-2"
-              title="Main menu"
-            >
-              <Menu className="w-6 h-6" />
-            </button>
-            <h1 className="text-2xl font-medium text-slate-800 tracking-tight">
-              Factory Data Board
-            </h1>
+        <div className="px-4 md:px-8 py-4 md:py-6 flex flex-col lg:flex-row items-start lg:items-center justify-between border-b border-slate-100 gap-4 lg:gap-0">
+          <div className="flex items-center justify-between w-full lg:w-auto gap-4">
+            <div className="flex items-center gap-2 md:gap-4">
+              <button
+                onClick={() => setIsSidebarCollapsed(!isSidebarCollapsed)}
+                className="p-2 hover:bg-slate-100 rounded-lg transition-colors text-slate-500 md:mr-2"
+                title="Main menu"
+              >
+                <Menu className="w-6 h-6" />
+              </button>
+              <h1 className="text-xl md:text-2xl font-medium text-slate-800 tracking-tight">
+                Factory Data Board
+              </h1>
+            </div>
 
             {/* Notifications & Settings */}
-            <div className="relative flex items-center gap-2 ml-4">
+            <div className="relative flex items-center gap-1 md:gap-2 ml-auto lg:ml-4">
               <button
                 onClick={() => setShowNotifications(!showNotifications)}
                 className="p-2 hover:bg-slate-100 rounded-full transition-colors relative"
@@ -506,7 +601,10 @@ export default function App() {
                                 {n.message}
                               </p>
                               <span className="text-[10px] text-slate-400">
-                                {new Date(n.created_at).toLocaleTimeString()}
+                                {new Date(n.created_at).toLocaleTimeString(
+                                  "en-US",
+                                  { timeZone: "Asia/Kolkata" }
+                                )}
                               </span>
                             </div>
                           </div>
@@ -523,8 +621,8 @@ export default function App() {
             </div>
           </div>
 
-          <div className="flex gap-6">
-            <div className="flex flex-col">
+          <div className="flex gap-4 md:gap-6 overflow-x-auto w-full lg:w-auto pb-2 lg:pb-0 no-scrollbar items-center">
+            <div className="flex flex-col shrink-0">
               <span className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-1">
                 Status
               </span>
@@ -560,11 +658,28 @@ export default function App() {
         </div>
 
         {/* Body Section */}
-        <div className="flex flex-1 min-h-[550px]">
+        <div className="flex flex-col md:flex-row flex-1 min-h-[550px] relative">
+          {/* Sidebar Desktop/Mobile Overlays */}
+          {!isSidebarCollapsed && isMobile && (
+            <div
+              className="absolute inset-0 bg-slate-900/20 backdrop-blur-sm z-30"
+              onClick={() => setIsSidebarCollapsed(true)}
+            />
+          )}
+
           {/* Sidebar */}
           <motion.div
-            animate={{ width: isSidebarCollapsed ? 80 : 256 }}
-            className="bg-[#f8fafc] border-r border-slate-100 flex flex-col overflow-hidden"
+            initial={false}
+            animate={{
+              width: isSidebarCollapsed
+                ? isMobile
+                  ? 0
+                  : 80
+                : isMobile
+                  ? "100%"
+                  : 256,
+            }}
+            className="bg-[#f8fafc] border-r border-slate-100 flex flex-col overflow-hidden absolute md:relative z-40 h-full max-w-[85vw] md:max-w-none shadow-2xl md:shadow-none"
           >
             <div
               className={cn(
@@ -636,12 +751,12 @@ export default function App() {
           </motion.div>
 
           {/* Main Content Area */}
-          <div className="flex-1 p-8 flex flex-col bg-white">
+          <div className="flex-1 p-4 md:p-8 flex flex-col bg-white overflow-y-auto">
             {/* Node Title & Icon */}
-            <div className="flex items-start justify-between mb-8">
+            <div className="flex flex-col md:flex-row items-start justify-between mb-6 md:mb-8 gap-4 md:gap-0">
               <div className="space-y-2 w-full">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-3">
+                <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 md:gap-0">
+                  <div className="flex flex-wrap items-center gap-3">
                     {isEditingSelectedAlias && accessLevel === "Admin" ? (
                       <input
                         autoFocus
@@ -686,7 +801,7 @@ export default function App() {
                   {accessLevel === "Admin" && (
                     <button
                       onClick={() => setNodeToDelete(selectedNode.id)}
-                      className="flex items-center gap-2 px-4 py-2 text-red-600 hover:bg-red-50 rounded-xl transition-colors text-xs font-bold uppercase tracking-wider border border-transparent hover:border-red-100"
+                      className="flex items-center justify-center gap-2 px-4 py-2 text-red-600 hover:bg-red-50 rounded-xl transition-colors text-xs font-bold uppercase tracking-wider border border-transparent hover:border-red-100 w-full md:w-auto mt-2 md:mt-0 shadow-sm md:shadow-none bg-red-50 md:bg-transparent"
                     >
                       <Trash2 className="w-4 h-4" />
                       Delete Node
@@ -697,8 +812,8 @@ export default function App() {
             </div>
 
             {/* Cards Area */}
-            <div className="grid grid-cols-2 gap-6 mb-8 max-w-2xl">
-              <div className="bg-[#f1f5f9] rounded-2xl p-6 aspect-square max-h-48 flex flex-col justify-center items-center shadow-sm border border-slate-200 relative overflow-hidden">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 md:gap-6 mb-6 md:mb-8 max-w-full md:max-w-2xl">
+              <div className="bg-[#f1f5f9] rounded-2xl p-6 aspect-square w-full max-h-48 flex flex-col justify-center items-center shadow-sm border border-slate-200 relative overflow-hidden">
                 <span className="text-[10px] font-bold text-slate-500 uppercase tracking-widest absolute top-4 left-4">
                   X-Ray Status
                 </span>
@@ -724,7 +839,7 @@ export default function App() {
                   </>
                 )}
               </div>
-              <div className="bg-[#f1f5f9] rounded-2xl p-6 aspect-square max-h-48 flex flex-col justify-center items-center shadow-sm border border-slate-200 relative overflow-hidden">
+              <div className="bg-[#f1f5f9] rounded-2xl p-6 aspect-square w-full max-h-48 flex flex-col justify-center items-center shadow-sm border border-slate-200 relative overflow-hidden">
                 <span className="text-[10px] font-bold text-slate-500 uppercase tracking-widest absolute top-4 left-4">
                   Access Control
                 </span>
@@ -773,7 +888,13 @@ export default function App() {
                     tickLine={false}
                     tick={{ fontSize: 11, fill: "#64748b" }}
                   />
-                  <Tooltip cursor={{ fill: "#f8fafc" }} />
+                  <Tooltip
+                    cursor={{ fill: "#f8fafc" }}
+                    formatter={(value: number) => [
+                      formatDuration(value * 60),
+                      "Usage",
+                    ]}
+                  />
                   <Bar
                     dataKey="hours"
                     fill="#1d4ed8"
@@ -786,7 +907,15 @@ export default function App() {
                         position="top"
                         fill="#64748b"
                         fontSize={11}
-                        formatter={(val: number) => val.toFixed(1)}
+                        formatter={(val: number) =>
+                          val > 0
+                            ? val * 60 < 1
+                              ? "<1m"
+                              : val < 1
+                                ? `${Math.round(val * 60)}m`
+                                : `${val.toFixed(1)}h`
+                            : "0"
+                        }
                       />
                     )}
                   </Bar>
@@ -810,8 +939,8 @@ export default function App() {
                   + Add Entry
                 </button>
               </div>
-              <div className="bg-slate-50 rounded-2xl border border-slate-100 overflow-hidden">
-                <table className="w-full text-left text-sm">
+              <div className="bg-slate-50 rounded-2xl border border-slate-100 overflow-x-auto">
+                <table className="w-full min-w-[500px] text-left text-sm">
                   <thead className="bg-slate-100/50 text-slate-500 text-[10px] uppercase tracking-widest">
                     <tr>
                       <th className="px-4 py-3 font-medium">Date</th>
@@ -825,7 +954,10 @@ export default function App() {
                       logs.map((log) => (
                         <tr key={log.id} className="text-slate-700">
                           <td className="px-4 py-3 whitespace-nowrap">
-                            {new Date(log.created_at).toLocaleDateString()}
+                            {new Date(log.created_at).toLocaleDateString(
+                              "en-US",
+                              { timeZone: "Asia/Kolkata" }
+                            )}
                           </td>
                           <td className="px-4 py-3 font-medium">
                             {log.technician_name}
@@ -950,7 +1082,7 @@ export default function App() {
                 initial={{ scale: 0.9, opacity: 0 }}
                 animate={{ scale: 1, opacity: 1 }}
                 exit={{ scale: 0.9, opacity: 0 }}
-                className="relative w-full max-w-md bg-white rounded-[32px] p-8 shadow-2xl"
+                className="relative w-full max-w-md bg-white rounded-[24px] md:rounded-[32px] p-6 md:p-8 shadow-2xl overflow-y-auto max-h-[85vh] no-scrollbar"
               >
                 <div className="flex items-center justify-between mb-6">
                   <h3 className="text-xl font-black text-slate-800">
@@ -1089,7 +1221,7 @@ export default function App() {
                 initial={{ scale: 0.9, opacity: 0, y: 20 }}
                 animate={{ scale: 1, opacity: 1, y: 0 }}
                 exit={{ scale: 0.9, opacity: 0, y: 20 }}
-                className="relative w-full max-w-2xl bg-white rounded-[32px] p-8 shadow-2xl overflow-hidden flex flex-col max-h-[80vh]"
+                className="relative w-full max-w-2xl bg-white rounded-[24px] md:rounded-[32px] p-6 md:p-8 shadow-2xl overflow-hidden flex flex-col max-h-[85vh] md:max-h-[80vh]"
               >
                 <div className="flex items-start justify-between mb-6 shrink-0">
                   <div>
@@ -1146,13 +1278,13 @@ export default function App() {
                               <td className="px-4 py-3 font-mono text-slate-700">
                                 {new Date(log.onTime).toLocaleTimeString(
                                   "en-US",
-                                  { hour12: false }
+                                  { hour12: false, timeZone: "Asia/Kolkata" }
                                 )}
                               </td>
                               <td className="px-4 py-3 font-mono text-slate-700">
                                 {new Date(log.offTime).toLocaleTimeString(
                                   "en-US",
-                                  { hour12: false }
+                                  { hour12: false, timeZone: "Asia/Kolkata" }
                                 )}
                               </td>
                               <td className="px-4 py-3 font-mono text-slate-900 font-medium text-right">
@@ -1203,7 +1335,7 @@ export default function App() {
                 initial={{ scale: 0.9, opacity: 0 }}
                 animate={{ scale: 1, opacity: 1 }}
                 exit={{ scale: 0.9, opacity: 0 }}
-                className="relative w-full max-w-md bg-white rounded-[32px] p-8 shadow-2xl"
+                className="relative w-full max-w-md bg-white rounded-[24px] md:rounded-[32px] p-6 md:p-8 shadow-2xl overflow-y-auto max-h-[85vh] no-scrollbar"
               >
                 <div className="flex items-center justify-between mb-6">
                   <h3 className="text-xl font-black text-slate-800">
@@ -1289,7 +1421,7 @@ export default function App() {
                 initial={{ scale: 0.9, opacity: 0 }}
                 animate={{ scale: 1, opacity: 1 }}
                 exit={{ scale: 0.9, opacity: 0 }}
-                className="relative w-full max-w-md bg-white rounded-[32px] p-8 shadow-2xl"
+                className="relative w-full max-w-md bg-white rounded-[24px] md:rounded-[32px] p-6 md:p-8 shadow-2xl overflow-y-auto max-h-[85vh] no-scrollbar"
               >
                 <div className="flex items-center justify-between mb-6">
                   <h3 className="text-xl font-black text-slate-800">
@@ -1357,7 +1489,7 @@ export default function App() {
                 initial={{ scale: 0.9, opacity: 0 }}
                 animate={{ scale: 1, opacity: 1 }}
                 exit={{ scale: 0.9, opacity: 0 }}
-                className="relative w-full max-w-md bg-white rounded-[32px] p-8 shadow-2xl"
+                className="relative w-full max-w-md bg-white rounded-[24px] md:rounded-[32px] p-6 md:p-8 shadow-2xl overflow-y-auto max-h-[85vh] no-scrollbar"
               >
                 <div className="flex items-center justify-between mb-6">
                   <h3 className="text-xl font-black text-slate-800">
@@ -1414,9 +1546,9 @@ export default function App() {
                 initial={{ scale: 0.9, opacity: 0, y: 20 }}
                 animate={{ scale: 1, opacity: 1, y: 0 }}
                 exit={{ scale: 0.9, opacity: 0, y: 20 }}
-                className="relative w-full max-w-5xl bg-white rounded-[32px] p-8 shadow-2xl overflow-hidden flex flex-col max-h-[85vh]"
+                className="relative w-full max-w-5xl bg-white rounded-[24px] md:rounded-[32px] p-6 md:p-8 shadow-2xl overflow-hidden flex flex-col max-h-[85vh]"
               >
-                <div className="flex items-center justify-between mb-6 shrink-0">
+                <div className="flex items-start md:items-center justify-between mb-6 shrink-0 gap-4 md:gap-0">
                   <div className="flex items-center gap-3">
                     <div className="w-10 h-10 rounded-xl bg-blue-50 flex items-center justify-center text-blue-600">
                       <Database className="w-5 h-5" />

@@ -2,18 +2,31 @@ import express from "express";
 import cors from "cors";
 import { createServer as createViteServer } from "vite";
 import path from "path";
-import { fileURLToPath } from "url";
 import mqtt from "mqtt";
 import Database from "better-sqlite3";
 import TelegramBot from "node-telegram-bot-api";
 import dotenv from "dotenv";
+import { Server as SocketIOServer } from "socket.io";
+import http from "http";
 
 dotenv.config();
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-
 const app = express();
+const server = http.createServer(app);
+const io = new SocketIOServer(server, {
+  cors: {
+    origin: "*",
+    methods: ["GET", "POST"],
+  },
+});
+
+io.on("connection", (socket) => {
+  console.log(`[Socket.io] Client connected: ${socket.id}`);
+  socket.on("disconnect", () => {
+    console.log(`[Socket.io] Client disconnected: ${socket.id}`);
+  });
+});
+
 const PORT = process.env.PORT || 3000;
 
 app.use(cors());
@@ -79,6 +92,16 @@ try {
 } catch (e) {
   // Column might already exist
 }
+
+// Clean up bugged telemetry data resulting from timezone offset calculations
+try {
+  // Fix the previously bugged telemetry logs where Local Time was converted to UTC incorrectly,
+  // causing an offset of exactly their timezone (e.g. +330 minutes for IST).
+  db.exec(`UPDATE telemetry 
+           SET on_time = strftime('%Y-%m-%dT%H:%M:%f', datetime(on_time, '+330 minutes')) || 'Z', 
+               duration_minutes = duration_minutes - 330 
+           WHERE duration_minutes >= 330 AND duration_minutes <= 400`);
+} catch (e) {}
 
 try {
   db.exec("ALTER TABLE nodes ADD COLUMN alert_safety_sent INTEGER DEFAULT 0;");
@@ -169,6 +192,8 @@ mqttClient.on("message", (topic, message) => {
   const payload = JSON.parse(message.toString());
   const nodeId = topic.split("/")[3];
 
+  console.log(`[MQTT] Received on ${topic}:`, payload);
+
   if (topic.endsWith("/heartbeat")) {
     handleHeartbeat(nodeId, payload);
   } else if (topic.endsWith("/state")) {
@@ -177,39 +202,61 @@ mqttClient.on("message", (topic, message) => {
 });
 
 const handleHeartbeat = (nodeId: string, payload: any) => {
-  db.prepare(
-    "UPDATE nodes SET last_heartbeat = CURRENT_TIMESTAMP, status = 'online', alert_offline_sent = 0, alert_safety_sent = 0 WHERE id = ?"
-  ).run(nodeId);
+  const result = db
+    .prepare(
+      "UPDATE nodes SET last_heartbeat = CURRENT_TIMESTAMP, status = 'online', alert_offline_sent = 0, alert_safety_sent = 0 WHERE id = ?"
+    )
+    .run(nodeId);
+  if (result.changes === 0) {
+    // Auto-provision new node
+    db.prepare(
+      "INSERT INTO nodes (id, alias, last_heartbeat, status, lifetime_anchor_date, alert_offline_sent, alert_safety_sent) VALUES (?, ?, CURRENT_TIMESTAMP, 'online', CURRENT_TIMESTAMP, 0, 0)"
+    ).run(nodeId, `Node - ${nodeId}`);
+    io.emit("new_node", { nodeId });
+  }
+  io.emit("status_update", { nodeId, status: "online", type: "heartbeat" });
 };
 
 const handleEvent = (nodeId: string, payload: any) => {
   if (payload.event_type === "xray_status") {
     if (payload.is_active) {
-      db.prepare(
-        "UPDATE nodes SET xray_active_since = CURRENT_TIMESTAMP WHERE id = ?"
-      ).run(nodeId);
+      const existing = db
+        .prepare("SELECT xray_active_since FROM nodes WHERE id = ?")
+        .get(nodeId) as any;
+      if (!existing?.xray_active_since) {
+        const isoNow = new Date().toISOString();
+        const result = db
+          .prepare("UPDATE nodes SET xray_active_since = ? WHERE id = ?")
+          .run(isoNow, nodeId);
+        if (result.changes === 0) {
+          // Auto-provision new node on start event
+          db.prepare(
+            "INSERT INTO nodes (id, alias, last_heartbeat, status, lifetime_anchor_date, xray_active_since, alert_offline_sent, alert_safety_sent) VALUES (?, ?, CURRENT_TIMESTAMP, 'online', CURRENT_TIMESTAMP, ?, 0, 0)"
+          ).run(nodeId, `Node - ${nodeId}`, isoNow);
+          io.emit("new_node", { nodeId });
+        }
+        io.emit("xray_status_update", { nodeId, isActive: true });
+      }
     } else {
       const row = db
         .prepare("SELECT xray_active_since FROM nodes WHERE id = ?")
         .get(nodeId) as any;
 
       if (row?.xray_active_since) {
-        const start = new Date(row.xray_active_since).getTime();
+        const activeStr = new Date(row.xray_active_since).toISOString();
+        const start = new Date(activeStr).getTime();
         const end = new Date().getTime();
         const minutes = (end - start) / 60000;
 
         db.prepare(
           "INSERT INTO telemetry (device_id, on_time, off_time, duration_minutes) VALUES (?, ?, ?, ?)"
-        ).run(
-          nodeId,
-          new Date(start).toISOString(),
-          new Date(end).toISOString(),
-          minutes
-        );
+        ).run(nodeId, activeStr, new Date(end).toISOString(), minutes);
 
         db.prepare(
           "UPDATE nodes SET xray_active_since = NULL WHERE id = ?"
         ).run(nodeId);
+        io.emit("xray_status_update", { nodeId, isActive: false });
+        io.emit("telemetry_update", { nodeId, duration_minutes: minutes });
       }
     }
   }
@@ -248,11 +295,44 @@ setInterval(() => {
 
   offlineNodes.forEach((node: any) => {
     db.prepare("UPDATE nodes SET status = 'offline' WHERE id = ?").run(node.id);
+
+    // Close out telemetry if left hanging
+    const row = db
+      .prepare(
+        "SELECT xray_active_since, last_heartbeat FROM nodes WHERE id = ?"
+      )
+      .get(node.id) as any;
+    if (row?.xray_active_since) {
+      const activeStr = new Date(row.xray_active_since).toISOString();
+      const start = new Date(activeStr).getTime();
+      const end = row.last_heartbeat
+        ? new Date(row.last_heartbeat).getTime()
+        : new Date().getTime(); // use last heartbeat to be safe, or now
+
+      // Only insert if start is before end
+      if (end > start) {
+        const minutes = (end - start) / 60000;
+        db.prepare(
+          "INSERT INTO telemetry (device_id, on_time, off_time, duration_minutes) VALUES (?, ?, ?, ?)"
+        ).run(node.id, activeStr, new Date(end).toISOString(), minutes);
+      }
+      db.prepare("UPDATE nodes SET xray_active_since = NULL WHERE id = ?").run(
+        node.id
+      );
+      io.emit("xray_status_update", { nodeId: node.id, isActive: false });
+    }
+
+    io.emit("status_update", {
+      nodeId: node.id,
+      status: "offline",
+      type: "watchdog",
+    });
     if (isOnShift && node.alert_offline_sent === 0) {
       sendAlert(`Device Offline: ${node.alias || node.id}`, node.id, "offline");
       db.prepare("UPDATE nodes SET alert_offline_sent = 1 WHERE id = ?").run(
         node.id
       );
+      io.emit("new_notification", {});
     }
   });
 
@@ -277,6 +357,7 @@ setInterval(() => {
       db.prepare("UPDATE nodes SET alert_safety_sent = 1 WHERE id = ?").run(
         node.id
       );
+      io.emit("new_notification", {});
     }
   });
 }, 60000);
@@ -347,21 +428,21 @@ app.get("/api/nodes/:id/telemetry", async (req, res) => {
       .prepare(
         `
       SELECT 
-        date(off_time) as date,
+        date(off_time, '+5 hours', '+30 minutes') as date,
         SUM(duration_minutes) / 60.0 as hours
       FROM telemetry
       WHERE device_id = ?
-        AND off_time >= datetime('now', '-' || ? || ' days')
-      GROUP BY date(off_time)
-      ORDER BY date(off_time) ASC
+        AND off_time >= datetime('now', '-' || ? || ' days', '-5 hours', '-30 minutes')
+      GROUP BY date(off_time, '+5 hours', '+30 minutes')
+      ORDER BY date(off_time, '+5 hours', '+30 minutes') ASC
     `
       )
       .all(id, days) as any[];
 
     const datesMap = new Map();
+    const nowIST = new Date(Date.now() + 5.5 * 3600000);
     for (let i = days - 1; i >= 0; i--) {
-      const d = new Date();
-      d.setDate(d.getDate() - i);
+      const d = new Date(nowIST.getTime() - i * 86400000);
       const ymd = d.toISOString().split("T")[0];
       datesMap.set(ymd, 0);
     }
@@ -369,12 +450,25 @@ app.get("/api/nodes/:id/telemetry", async (req, res) => {
       if (row.date) datesMap.set(row.date, row.hours);
     }
 
+    const activeNode = db
+      .prepare("SELECT xray_active_since FROM nodes WHERE id = ?")
+      .get(id) as any;
+    if (activeNode?.xray_active_since) {
+      const activeStr = new Date(activeNode.xray_active_since).toISOString();
+      const activeStart = new Date(activeStr).getTime();
+      const activeDurationHours = (Date.now() - activeStart) / 3600000; // milliseconds to hours
+      const todayStr = nowIST.toISOString().split("T")[0];
+      if (datesMap.has(todayStr)) {
+        datesMap.set(todayStr, datesMap.get(todayStr) + activeDurationHours);
+      }
+    }
+
     const result = Array.from(datesMap.entries()).map(([dateStr, hours]) => {
       const d = new Date(dateStr);
       return {
         rawDate: dateStr,
         date: d.toLocaleDateString("en-US", { month: "short", day: "numeric" }),
-        hours,
+        hours: Number(hours.toFixed(2)),
       };
     });
 
@@ -403,13 +497,23 @@ app.get("/api/nodes/:id/telemetry/details", async (req, res) => {
         duration_minutes as durationMinutes
       FROM telemetry
       WHERE device_id = ?
-        AND date(off_time) = ?
+        AND date(off_time, '+5 hours', '+30 minutes') = ?
       ORDER BY off_time ASC
     `
       )
-      .all(id, date);
+      .all(id, date) as any[];
 
-    res.json(records);
+    const safeRecords = records.map((r) => ({
+      onTime: r.onTime.endsWith("Z")
+        ? r.onTime
+        : r.onTime.replace(" ", "T") + "Z",
+      offTime: r.offTime.endsWith("Z")
+        ? r.offTime
+        : r.offTime.replace(" ", "T") + "Z",
+      durationMinutes: r.durationMinutes,
+    }));
+
+    res.json(safeRecords);
   } catch (err: any) {
     console.error("SQLite telemetry details query failed:", err.message);
     res.status(500).json({ error: "Query failed" });
@@ -429,7 +533,20 @@ app.get("/api/nodes/:id/lifetime-hours", async (req, res) => {
     `
       )
       .get(id) as any;
-    res.json({ hours: row?.hours || 0 });
+
+    let hours = row?.hours || 0;
+
+    // Add active session if any
+    const activeNode = db
+      .prepare("SELECT xray_active_since FROM nodes WHERE id = ?")
+      .get(id) as any;
+    if (activeNode?.xray_active_since) {
+      const activeStr = new Date(activeNode.xray_active_since).toISOString();
+      const activeStart = new Date(activeStr).getTime();
+      hours += (Date.now() - activeStart) / 3600000;
+    }
+
+    res.json({ hours: Number(hours.toFixed(2)) });
   } catch (err: any) {
     res.json({ hours: 0 });
   }
@@ -514,39 +631,43 @@ app.post("/api/notifications/:id/read", (req, res) => {
 });
 
 // --- Vite Integration ---
-if (process.env.NODE_ENV !== "production") {
-  const vite = await createViteServer({
-    server: { middlewareMode: true },
-    appType: "spa",
-  });
-  app.use(vite.middlewares);
-} else {
-  const distPath = path.join(process.cwd(), "dist");
-  app.use(express.static(distPath));
-  app.get("*", (req, res) => {
-    res.sendFile(path.join(distPath, "index.html"));
+async function startServer() {
+  if (process.env.NODE_ENV !== "production") {
+    const vite = await createViteServer({
+      server: { middlewareMode: true },
+      appType: "spa",
+    });
+    app.use(vite.middlewares);
+  } else {
+    const distPath = path.join(process.cwd(), "dist");
+    app.use(express.static(distPath));
+    app.get("*", (req, res) => {
+      res.sendFile(path.join(distPath, "index.html"));
+    });
+  }
+
+  app.use(
+    (
+      err: any,
+      req: express.Request,
+      res: express.Response,
+      next: express.NextFunction
+    ) => {
+      console.error("Express error:", err);
+      if (!res.headersSent) {
+        res
+          .status(err.status || 500)
+          .json({ error: err.message || "Internal Server Error" });
+      }
+    }
+  );
+
+  server.listen(Number(PORT), "0.0.0.0", () => {
+    console.log(`Server running on http://localhost:${PORT}`);
   });
 }
 
-app.use(
-  (
-    err: any,
-    req: express.Request,
-    res: express.Response,
-    next: express.NextFunction
-  ) => {
-    console.error("Express error:", err);
-    if (!res.headersSent) {
-      res
-        .status(err.status || 500)
-        .json({ error: err.message || "Internal Server Error" });
-    }
-  }
-);
-
-app.listen(PORT, "0.0.0.0", () => {
-  console.log(`Server running on http://localhost:${PORT}`);
-});
+startServer();
 
 process.on("SIGINT", () => {
   process.exit();
