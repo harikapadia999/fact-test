@@ -1,0 +1,12 @@
+node_modules
+.env
+.env.local
+.env.example
+dist
+*.log
+.git
+.gitignore
+README.md
+tests
+test-fetch.ts
+test-fetch2.ts
