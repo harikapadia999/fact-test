@@ -32,7 +32,7 @@ import { motion, AnimatePresence } from "motion/react";
 import { cn } from "./lib/utils";
 import jsPDF from "jspdf";
 import autoTable from "jspdf-autotable";
-import * as XLSX from "xlsx";
+import * as XLSX from "xlsx-js-style";
 
 // --- Types ---
 interface Node {
@@ -229,6 +229,7 @@ export default function App() {
   });
   const [config, setConfig] = useState<Record<string, string>>({});
 
+  const [dayWiseReport, setDayWiseReport] = useState(false);
   const [lifetimeHours, setLifetimeHours] = useState<number>(0);
   const [showDetailedReport, setShowDetailedReport] = useState(false);
   const [detailedReportStartDate, setDetailedReportStartDate] =
@@ -527,49 +528,167 @@ export default function App() {
   };
 
   const exportToPDF = () => {
-    const doc = new jsPDF();
-    doc.text(
-      `Telemetry Report for Node: ${selectedNode?.alias || selectedNode?.id}`,
-      14,
-      15
-    );
-    doc.text(
-      `Date Range: ${detailedReportStartDate} to ${detailedReportEndDate}`,
-      14,
-      25
-    );
+  const doc = new jsPDF();
+  const nodeName = selectedNode?.alias || selectedNode?.id || "Unknown";
 
-    autoTable(doc, {
-      startY: 30,
-      head: [["Date", "ON Time", "OFF Time", "Working Time"]],
-      body: detailedReportData.map((log) => [
-        new Date(log.onTime).toLocaleDateString("en-US"),
-        formatReportDate(log.onTime),
-        formatReportDate(log.offTime),
-        formatDuration(log.durationMinutes),
-      ]),
-      foot: [
-        [
-          "Total",
-          "",
-          "",
-          formatDuration(
-            detailedReportData.reduce(
-              (acc, curr) => acc + curr.durationMinutes,
-              0
-            )
-          ),
-        ],
-      ],
+  // Title block
+  const formatPDFDate = (dateStr: string) => {
+  const d = new Date(dateStr + "T00:00:00"); // prevent timezone shift
+  const dd = String(d.getDate()).padStart(2, "0");
+  const mm = String(d.getMonth() + 1).padStart(2, "0");
+  const yyyy = d.getFullYear();
+  return `${dd}-${mm}-${yyyy}`;
+};
+
+// Title block
+doc.setFontSize(14);
+doc.setFont("helvetica", "bold");
+doc.text("Telemetry Report", 14, 16);
+
+doc.setFontSize(10);
+doc.setFont("helvetica", "normal");
+doc.setTextColor(100);
+doc.text(`Node: ${nodeName}`, 14, 24);
+doc.text(`Date Range: ${formatPDFDate(detailedReportStartDate)} to ${formatPDFDate(detailedReportEndDate)}`, 14, 30);
+doc.text(`Report Type: ${dayWiseReport ? "Day-wise Summary" : "Detailed Sessions"}`, 14, 36);
+doc.setTextColor(0);
+
+  if (dayWiseReport) {
+    const dayMap: Record<string, number> = {};
+    detailedReportData.forEach((log) => {
+      const day = new Date(log.onTime).toLocaleDateString("en-US");
+      dayMap[day] = (dayMap[day] || 0) + log.durationMinutes;
     });
 
-    doc.save(
-      `telemetry_report_${selectedNode?.id}_${detailedReportStartDate}.pdf`
+    const totalMins = Object.values(dayMap).reduce((a, b) => a + b, 0);
+    const body = Object.entries(dayMap).map(([day, mins], i) => [
+      String(i + 1),
+      day,
+      formatDuration(mins),
+    ]);
+
+    let finalY = 42;
+    autoTable(doc, {
+      startY: 42,
+      head: [["#", "Date", "Total Usage"]],
+      body,
+      headStyles: { fillColor: [29, 78, 216], fontStyle: "bold" },
+      styles: { fontSize: 10 },
+      columnStyles: { 0: { cellWidth: 12 } },
+      didDrawPage: (data) => { finalY = data.cursor?.y ?? finalY; },
+    });
+
+    // Total row on last page only
+    const colPositions = { label: 26, value: 60 };
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(10);
+    doc.setFillColor(241, 245, 249);
+    doc.rect(14, finalY, 180, 8, "F");
+    doc.text("Total", colPositions.label, finalY + 5.5);
+    doc.text(formatDuration(totalMins), colPositions.value, finalY + 5.5);
+    doc.setFont("helvetica", "normal");
+  } else {
+    const totalMins = detailedReportData.reduce(
+      (acc, curr) => acc + curr.durationMinutes,
+      0
     );
-  };
+    const body = detailedReportData.map((log, i) => [
+      String(i + 1),
+      new Date(log.onTime).toLocaleDateString("en-US"),
+      formatReportDate(log.onTime),
+      formatReportDate(log.offTime),
+      formatDuration(log.durationMinutes),
+    ]);
+
+    let finalY = 42;
+    autoTable(doc, {
+      startY: 42,
+      head: [["#", "Date", "ON Time", "OFF Time", "Working Time"]],
+      body,
+      headStyles: { fillColor: [29, 78, 216], fontStyle: "bold" },
+      styles: { fontSize: 9 },
+      columnStyles: { 0: { cellWidth: 10 } },
+      didDrawPage: (data) => { finalY = data.cursor?.y ?? finalY; },
+    });
+
+    // Total row on last page only
+    const colPositions = { label: 108, value: 150 };
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(10);
+    doc.setFillColor(241, 245, 249);
+    doc.rect(14, finalY, 180, 8, "F");
+    doc.text("Total", colPositions.label, finalY + 5.5);
+    doc.text(formatDuration(totalMins), colPositions.value, finalY + 5.5);
+    doc.setFont("helvetica", "normal");
+  }
+
+  doc.save(
+    `telemetry_report_${selectedNode?.id}_${detailedReportStartDate}.pdf`
+  );
+};
 
   const exportToExcel = () => {
-    const worksheetData = detailedReportData.map((log) => ({
+  const wb = XLSX.utils.book_new();
+
+  if (dayWiseReport) {
+    // Day-wise summary sheet
+    const dayMap: Record<string, number> = {};
+    detailedReportData.forEach((log) => {
+      const day = new Date(log.onTime).toLocaleDateString("en-US");
+      dayMap[day] = (dayMap[day] || 0) + log.durationMinutes;
+    });
+
+    const rows = Object.entries(dayMap).map(([day, mins], i) => ({
+      "#": i + 1,
+      Date: day,
+      "Total Usage": formatDuration(mins),
+      "Duration (Min)": mins,
+    }));
+
+    const totalMins = Object.values(dayMap).reduce((a, b) => a + b, 0);
+    const ws = XLSX.utils.json_to_sheet(rows);
+
+    // Append total row manually
+    const totalRowIndex = rows.length + 2; // 1-based + header row
+    XLSX.utils.sheet_add_aoa(
+      ws,
+      [["", "TOTAL", formatDuration(totalMins)]],
+      { origin: `A${totalRowIndex}` }
+    );
+
+    // Column widths
+    ws["!cols"] = [{ wch: 5 }, { wch: 15 }, { wch: 18 }, { wch: 16 }];
+
+    // Style header row (row 1) — blue background, white bold text
+    const headerKeys = ["A1", "B1", "C1", "D1"];
+    headerKeys.forEach((cell) => {
+      if (ws[cell]) {
+        ws[cell].s = {
+          fill: { fgColor: { rgb: "1D4ED8" } },
+          font: { bold: true, color: { rgb: "FFFFFF" } },
+          alignment: { horizontal: "center" },
+        };
+      }
+    });
+
+    // Style total row — bold
+    const totalRowCells = [
+      `A${totalRowIndex}`,
+      `B${totalRowIndex}`,
+      `C${totalRowIndex}`,
+      `D${totalRowIndex}`,
+    ];
+    totalRowCells.forEach((cell) => {
+      if (ws[cell]) {
+        ws[cell].s = { font: { bold: true } };
+      }
+    });
+
+    XLSX.utils.book_append_sheet(wb, ws, "Day-wise Summary");
+  } else {
+    // Detailed per-session sheet
+    const rows = detailedReportData.map((log, i) => ({
+      "#": i + 1,
       Date: new Date(log.onTime).toLocaleDateString("en-US"),
       "ON Time": formatReportDate(log.onTime),
       "OFF Time": formatReportDate(log.offTime),
@@ -577,14 +696,63 @@ export default function App() {
       "Duration (Min)": log.durationMinutes,
     }));
 
-    const ws = XLSX.utils.json_to_sheet(worksheetData);
-    const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, "Telemetry");
-    XLSX.writeFile(
-      wb,
-      `telemetry_report_${selectedNode?.id}_${detailedReportStartDate}.xlsx`
+    const totalMins = detailedReportData.reduce(
+      (acc, curr) => acc + curr.durationMinutes,
+      0
     );
-  };
+    const ws = XLSX.utils.json_to_sheet(rows);
+
+    const totalRowIndex = rows.length + 2;
+    XLSX.utils.sheet_add_aoa(
+      ws,
+      [["", "", "", "TOTAL", formatDuration(totalMins)]],
+      { origin: `A${totalRowIndex}` }
+    );
+
+    ws["!cols"] = [
+      { wch: 5 },
+      { wch: 14 },
+      { wch: 18 },
+      { wch: 18 },
+      { wch: 18 },
+      { wch: 16 },
+    ];
+
+    // Style header row
+    const headerKeys = ["A1", "B1", "C1", "D1", "E1", "F1"];
+    headerKeys.forEach((cell) => {
+      if (ws[cell]) {
+        ws[cell].s = {
+          fill: { fgColor: { rgb: "1D4ED8" } },
+          font: { bold: true, color: { rgb: "FFFFFF" } },
+          alignment: { horizontal: "center" },
+        };
+      }
+    });
+
+    // Style total row
+    const totalRowCells = [
+      `A${totalRowIndex}`,
+      `B${totalRowIndex}`,
+      `C${totalRowIndex}`,
+      `D${totalRowIndex}`,
+      `E${totalRowIndex}`,
+      `F${totalRowIndex}`,
+    ];
+    totalRowCells.forEach((cell) => {
+      if (ws[cell]) {
+        ws[cell].s = { font: { bold: true } };
+      }
+    });
+
+    XLSX.utils.book_append_sheet(wb, ws, "Telemetry");
+  }
+
+  XLSX.writeFile(
+    wb,
+    `telemetry_report_${selectedNode?.id}_${detailedReportStartDate}.xlsx`
+  );
+};
 
   if (isInitializing) {
     return (
@@ -1402,6 +1570,21 @@ export default function App() {
                         }
                         className="text-sm border border-slate-200 rounded-lg px-3 py-1.5 text-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500 bg-slate-50"
                       />
+                      <div className="flex items-center gap-2 ml-4">
+                        <input
+                          type="checkbox"
+                          id="daywise-toggle"
+                          checked={dayWiseReport}
+                          onChange={(e) => setDayWiseReport(e.target.checked)}
+                          className="w-4 h-4 accent-blue-600 cursor-pointer"
+                        />
+                        <label
+                          htmlFor="daywise-toggle"
+                          className="text-sm text-slate-600 font-medium cursor-pointer select-none"
+                        >
+                          Show day-wise summary
+                        </label>
+                      </div>
                     </div>
                   </div>
                   <div className="flex gap-2">
