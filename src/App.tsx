@@ -30,89 +30,17 @@ import {
 } from "recharts";
 import { motion, AnimatePresence } from "motion/react";
 import { cn } from "./lib/utils";
-import jsPDF from "jspdf";
-import autoTable from "jspdf-autotable";
-import * as XLSX from "xlsx";
-
-// --- Types ---
-interface Node {
-  id: string;
-  alias: string;
-  status: "online" | "offline";
-  last_heartbeat: string;
-  lifetime_anchor_date: string;
-}
-
-interface TelemetryData {
-  date: string;
-  hours: number;
-}
-
-interface MaintenanceLog {
-  id: number;
-  technician_name: string;
-  event_type: string;
-  notes: string;
-  created_at: string;
-}
-
-interface Notification {
-  id: number;
-  node_id: string | null;
-  message: string;
-  type: "offline" | "safety" | "alert";
-  created_at: string;
-  is_read: number;
-}
-
-interface TelemetryDetails {
-  onTime: string;
-  offTime: string;
-  durationMinutes: number;
-}
-
-const formatDuration = (minutes: number) => {
-  if (minutes === 0) return "0 sec";
-  if (minutes < 1) {
-    return `${Math.round(minutes * 60)} sec`;
-  } else if (minutes < 60) {
-    return `${minutes.toFixed(1)} min`;
-  } else {
-    return `${(minutes / 60).toFixed(2)} hrs`;
-  }
-};
-
-const fetchJson = async (url: string, options: RequestInit = {}) => {
-  const token = localStorage.getItem("token");
-  const headers = new Headers(options.headers || {});
-  if (token) {
-    headers.set("Authorization", `Bearer ${token}`);
-  }
-
-  const finalOptions = {
-    ...options,
-    headers,
-    credentials: "same-origin" as RequestCredentials,
-  };
-
-  const res = await fetch(url, finalOptions);
-  const contentType = res.headers.get("content-type");
-  if (
-    res.status === 401 &&
-    !url.includes("/api/login") &&
-    !url.includes("/api/me") &&
-    typeof window !== "undefined"
-  ) {
-    window.dispatchEvent(new Event("auth_expired"));
-  }
-  if (contentType && contentType.includes("application/json")) {
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.error || `HTTP error ${res.status}`);
-    return data;
-  }
-  if (!res.ok) throw new Error(`HTTP error ${res.status}`);
-  return null;
-};
+import {
+  Node,
+  TelemetryData,
+  MaintenanceLog,
+  Notification,
+  TelemetryDetails,
+} from "./types";
+import { formatDuration } from "./utils";
+import { fetchJson } from "./api";
+import { AuthCard } from "./components/AuthCard";
+import { DetailedReportModal } from "./components/DetailedReportModal";
 
 export default function App() {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
@@ -205,10 +133,10 @@ export default function App() {
   const [logs, setLogs] = useState<MaintenanceLog[]>([]);
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const [accessLevel, setAccessLevel] = useState<"Admin" | "Technician">(
-    "Technician"
+    "Technician",
   );
   const [analyticsView, setAnalyticsView] = useState<"Weekly" | "Monthly">(
-    "Weekly"
+    "Weekly",
   );
   const [loading, setLoading] = useState(true);
   const [showLogModal, setShowLogModal] = useState(false);
@@ -231,13 +159,15 @@ export default function App() {
 
   const [lifetimeHours, setLifetimeHours] = useState<number>(0);
   const [showDetailedReport, setShowDetailedReport] = useState(false);
+  const pad = (n: number) => String(n).padStart(2, "0");
+  const today = new Date();
+  const localToday = `${today.getFullYear()}-${pad(today.getMonth() + 1)}-${pad(today.getDate())}`;
+  const localFirstDay = `${today.getFullYear()}-${pad(today.getMonth() + 1)}-01`;
+
   const [detailedReportStartDate, setDetailedReportStartDate] =
-    useState<string>(
-      new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString().split("T")[0]
-    );
-  const [detailedReportEndDate, setDetailedReportEndDate] = useState<string>(
-    new Date().toISOString().split("T")[0]
-  );
+    useState<string>(localFirstDay);
+  const [detailedReportEndDate, setDetailedReportEndDate] =
+    useState<string>(localToday);
   const [detailedReportData, setDetailedReportData] = useState<
     TelemetryDetails[]
   >([]);
@@ -344,7 +274,11 @@ export default function App() {
       }
       setLoading(false);
     } catch (err: any) {
-      if (err?.message !== "Failed to fetch") {
+      if (
+        err?.message !== "Failed to fetch" &&
+        !err?.message?.includes("Unauthorized") &&
+        !err?.message?.includes("401")
+      ) {
         console.error("Failed to fetch nodes:", err);
       }
       setLoading(false);
@@ -357,7 +291,11 @@ export default function App() {
       const data = await fetchJson("/api/notifications");
       setNotifications(data || []);
     } catch (err: any) {
-      if (err?.message !== "Failed to fetch") {
+      if (
+        err?.message !== "Failed to fetch" &&
+        !err?.message?.includes("Unauthorized") &&
+        !err?.message?.includes("401")
+      ) {
         console.error("Failed to fetch notifications:", err);
       }
     }
@@ -388,7 +326,7 @@ export default function App() {
                 24 *
                 60 *
                 60 *
-                1000
+                1000,
           )
             .toISOString()
             .split("T")[0], // Approximation for click handler
@@ -410,7 +348,7 @@ export default function App() {
         setLoadingDetails(true);
         try {
           const details = await fetchJson(
-            `/api/nodes/${selectedNodeId}/telemetry/details?startDate=${detailedReportStartDate}&endDate=${detailedReportEndDate}`
+            `/api/nodes/${selectedNodeId}/telemetry/details?startDate=${detailedReportStartDate}&endDate=${detailedReportEndDate}`,
           );
           setDetailedReportData(details || []);
         } catch (err) {
@@ -447,7 +385,7 @@ export default function App() {
       if (data) {
         const configObj = data.reduce(
           (acc: any, curr: any) => ({ ...acc, [curr.key]: curr.value }),
-          {}
+          {},
         );
         setConfig(configObj);
       }
@@ -511,81 +449,6 @@ export default function App() {
     }
   };
 
-  const formatReportDate = (isoString: string) => {
-    const d = new Date(isoString);
-    if (detailedReportStartDate === detailedReportEndDate) {
-      return d.toLocaleTimeString("en-US", { hour12: false });
-    }
-    return d.toLocaleString("en-US", {
-      month: "short",
-      day: "numeric",
-      hour: "2-digit",
-      minute: "2-digit",
-      second: "2-digit",
-      hour12: false,
-    });
-  };
-
-  const exportToPDF = () => {
-    const doc = new jsPDF();
-    doc.text(
-      `Telemetry Report for Node: ${selectedNode?.alias || selectedNode?.id}`,
-      14,
-      15
-    );
-    doc.text(
-      `Date Range: ${detailedReportStartDate} to ${detailedReportEndDate}`,
-      14,
-      25
-    );
-
-    autoTable(doc, {
-      startY: 30,
-      head: [["Date", "ON Time", "OFF Time", "Working Time"]],
-      body: detailedReportData.map((log) => [
-        new Date(log.onTime).toLocaleDateString("en-US"),
-        formatReportDate(log.onTime),
-        formatReportDate(log.offTime),
-        formatDuration(log.durationMinutes),
-      ]),
-      foot: [
-        [
-          "Total",
-          "",
-          "",
-          formatDuration(
-            detailedReportData.reduce(
-              (acc, curr) => acc + curr.durationMinutes,
-              0
-            )
-          ),
-        ],
-      ],
-    });
-
-    doc.save(
-      `telemetry_report_${selectedNode?.id}_${detailedReportStartDate}.pdf`
-    );
-  };
-
-  const exportToExcel = () => {
-    const worksheetData = detailedReportData.map((log) => ({
-      Date: new Date(log.onTime).toLocaleDateString("en-US"),
-      "ON Time": formatReportDate(log.onTime),
-      "OFF Time": formatReportDate(log.offTime),
-      "Working Time": formatDuration(log.durationMinutes),
-      "Duration (Min)": log.durationMinutes,
-    }));
-
-    const ws = XLSX.utils.json_to_sheet(worksheetData);
-    const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, "Telemetry");
-    XLSX.writeFile(
-      wb,
-      `telemetry_report_${selectedNode?.id}_${detailedReportStartDate}.xlsx`
-    );
-  };
-
   if (isInitializing) {
     return (
       <div className="min-h-screen bg-[#f4f4f5] flex items-center justify-center">
@@ -596,92 +459,19 @@ export default function App() {
 
   if (!isAuthenticated) {
     return (
-      <div className="min-h-screen bg-[#f4f4f5] flex items-center justify-center p-4 md:p-8 font-sans">
-        <div className="w-full max-w-sm bg-white rounded-2xl shadow-xl overflow-hidden flex flex-col border border-slate-200 p-8">
-          <div className="flex flex-col items-center mb-8">
-            <div className="w-12 h-12 bg-[#e0e7ff] text-blue-600 rounded-full flex items-center justify-center mb-4">
-              <Lock className="w-6 h-6" />
-            </div>
-            <h1 className="text-2xl font-black text-slate-800 tracking-tight">
-              Factory Portal
-            </h1>
-            <p className="text-sm font-medium text-slate-500 uppercase tracking-widest mt-1">
-              {currentView === "login" ? "Authentication" : "Registration"}
-            </p>
-          </div>
-
-          <form
-            onSubmit={currentView === "login" ? handleLogin : handleSignup}
-            className="space-y-4"
-          >
-            {authError && (
-              <div className="p-3 bg-red-50 text-red-600 rounded-xl text-xs font-bold text-center border border-red-100">
-                {authError}
-              </div>
-            )}
-            <div className="space-y-1">
-              <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">
-                Username
-              </label>
-              <input
-                required
-                type="text"
-                value={authUsername}
-                onChange={(e) => setAuthUsername(e.target.value)}
-                className="w-full px-4 py-3 bg-slate-50 border border-slate-100 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20"
-              />
-            </div>
-            <div className="space-y-1">
-              <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">
-                Password
-              </label>
-              <input
-                required
-                type="password"
-                value={authPassword}
-                onChange={(e) => setAuthPassword(e.target.value)}
-                className="w-full px-4 py-3 bg-slate-50 border border-slate-100 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20"
-              />
-            </div>
-            <button
-              type="submit"
-              className="w-full py-3 bg-blue-600 text-white rounded-xl font-bold text-sm tracking-wide mt-2 hover:bg-blue-700 transition-colors"
-            >
-              {currentView === "login" ? "Login" : "Sign Up"}
-            </button>
-          </form>
-
-          <div className="mt-6 text-center text-xs text-slate-500">
-            {currentView === "login" ? (
-              <>
-                Don't have an account?{" "}
-                <span
-                  onClick={() => {
-                    setCurrentView("signup");
-                    setAuthError("");
-                  }}
-                  className="text-blue-600 font-bold hover:underline cursor-pointer"
-                >
-                  Sign Up
-                </span>
-              </>
-            ) : (
-              <>
-                Already have an account?{" "}
-                <span
-                  onClick={() => {
-                    setCurrentView("login");
-                    setAuthError("");
-                  }}
-                  className="text-blue-600 font-bold hover:underline cursor-pointer"
-                >
-                  Login
-                </span>
-              </>
-            )}
-          </div>
-        </div>
-      </div>
+      <AuthCard
+        currentView={currentView as "login" | "signup"}
+        authError={authError}
+        authUsername={authUsername}
+        setAuthUsername={setAuthUsername}
+        authPassword={authPassword}
+        setAuthPassword={setAuthPassword}
+        onSubmit={currentView === "login" ? handleLogin : handleSignup}
+        switchView={(v) => {
+          setCurrentView(v);
+          setAuthError("");
+        }}
+      />
     );
   }
 
@@ -694,7 +484,7 @@ export default function App() {
   }
 
   const sinceDate = new Date(
-    selectedNode.lifetime_anchor_date
+    selectedNode.lifetime_anchor_date,
   ).toLocaleDateString("en-US", {
     month: "short",
     day: "2-digit",
@@ -764,7 +554,7 @@ export default function App() {
                             onClick={() => markNotificationAsRead(n.id)}
                             className={cn(
                               "p-4 border-b border-slate-50 last:border-0 hover:bg-slate-50 transition-colors cursor-pointer flex gap-3",
-                              !n.is_read && "bg-blue-50/50"
+                              !n.is_read && "bg-blue-50/50",
                             )}
                           >
                             <div
@@ -772,7 +562,7 @@ export default function App() {
                                 "w-8 h-8 rounded-full flex items-center justify-center shrink-0",
                                 n.type === "safety"
                                   ? "bg-red-100 text-red-600"
-                                  : "bg-blue-100 text-blue-600"
+                                  : "bg-blue-100 text-blue-600",
                               )}
                             >
                               {n.type === "safety" ? (
@@ -796,7 +586,7 @@ export default function App() {
                                     minute: "2-digit",
                                     second: "2-digit",
                                     hour12: true,
-                                  }
+                                  },
                                 )}
                               </span>
                             </div>
@@ -869,7 +659,7 @@ export default function App() {
             <div
               className={cn(
                 "px-6 py-4 flex items-center justify-between transition-opacity duration-200",
-                isSidebarCollapsed ? "opacity-0" : "opacity-100"
+                isSidebarCollapsed ? "opacity-0" : "opacity-100",
               )}
             >
               <span className="text-[11px] font-bold text-slate-500 uppercase tracking-widest">
@@ -897,7 +687,7 @@ export default function App() {
                         : "gap-3",
                       selectedNodeId === node.id
                         ? "bg-[#e0e7ff] border-blue-600 text-blue-900"
-                        : "border-transparent hover:bg-slate-50 text-slate-700"
+                        : "border-transparent hover:bg-slate-50 text-slate-700",
                     )}
                     title={
                       isSidebarCollapsed ? node.alias || node.id : undefined
@@ -908,7 +698,7 @@ export default function App() {
                         "w-2.5 h-2.5 rounded-full shrink-0 shadow-sm",
                         node.status === "online"
                           ? "bg-green-500"
-                          : "bg-slate-300"
+                          : "bg-slate-300",
                       )}
                     />
                     {!isSidebarCollapsed && (
@@ -1184,7 +974,7 @@ export default function App() {
                     "px-6 py-1.5 rounded-full text-sm font-medium transition-colors border",
                     analyticsView === "Weekly"
                       ? "bg-[#e0e7ff] text-blue-700 border-blue-200"
-                      : "bg-transparent text-slate-400 border-transparent hover:text-slate-600"
+                      : "bg-transparent text-slate-400 border-transparent hover:text-slate-600",
                   )}
                 >
                   Weekly
@@ -1195,7 +985,7 @@ export default function App() {
                     "text-sm font-medium transition-colors",
                     analyticsView === "Monthly"
                       ? "text-slate-800"
-                      : "text-slate-400 hover:text-slate-600"
+                      : "text-slate-400 hover:text-slate-600",
                   )}
                 >
                   Monthly
@@ -1211,7 +1001,7 @@ export default function App() {
               "w-full py-3 rounded-full font-medium text-sm transition-colors",
               accessLevel === "Admin"
                 ? "bg-slate-200 text-slate-700 hover:bg-slate-300"
-                : "bg-slate-100 text-slate-400 cursor-not-allowed"
+                : "bg-slate-100 text-slate-400 cursor-not-allowed",
             )}
           >
             Reset Lifetime Counter
@@ -1292,7 +1082,7 @@ export default function App() {
                         });
                         handleSaveConfig(
                           "watchdog_timeout_min",
-                          e.target.value
+                          e.target.value,
                         );
                       }}
                       className="w-full px-4 py-3 bg-slate-50 border border-slate-100 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20"
@@ -1357,148 +1147,17 @@ export default function App() {
           )}
         </AnimatePresence>
 
-        {/* Detailed Report Modal */}
-        <AnimatePresence>
-          {showDetailedReport && (
-            <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-              <motion.div
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                exit={{ opacity: 0 }}
-                onClick={() => setShowDetailedReport(false)}
-                className="absolute inset-0 bg-slate-900/40 backdrop-blur-sm"
-              />
-              <motion.div
-                initial={{ scale: 0.9, opacity: 0, y: 20 }}
-                animate={{ scale: 1, opacity: 1, y: 0 }}
-                exit={{ scale: 0.9, opacity: 0, y: 20 }}
-                className="relative w-full max-w-2xl bg-white rounded-[32px] p-8 shadow-2xl overflow-hidden flex flex-col max-h-[80vh]"
-              >
-                <div className="flex items-start justify-between mb-6 shrink-0">
-                  <div>
-                    <h3 className="text-xl font-black text-slate-800">
-                      Detailed Report
-                    </h3>
-                    <div className="mt-3 flex items-center gap-2">
-                      <label className="text-sm text-slate-500 font-medium">
-                        Start Date:
-                      </label>
-                      <input
-                        type="date"
-                        value={detailedReportStartDate}
-                        onChange={(e) =>
-                          setDetailedReportStartDate(e.target.value)
-                        }
-                        className="text-sm border border-slate-200 rounded-lg px-3 py-1.5 text-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500 bg-slate-50"
-                      />
-                      <label className="text-sm text-slate-500 font-medium ml-2">
-                        End Date:
-                      </label>
-                      <input
-                        type="date"
-                        value={detailedReportEndDate}
-                        onChange={(e) =>
-                          setDetailedReportEndDate(e.target.value)
-                        }
-                        className="text-sm border border-slate-200 rounded-lg px-3 py-1.5 text-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500 bg-slate-50"
-                      />
-                    </div>
-                  </div>
-                  <div className="flex gap-2">
-                    <button
-                      onClick={exportToPDF}
-                      title="Export to PDF"
-                      className="p-2 hover:bg-slate-100 text-red-600 rounded-full transition-colors"
-                    >
-                      <FileText className="w-5 h-5" />
-                    </button>
-                    <button
-                      onClick={exportToExcel}
-                      title="Export to Excel"
-                      className="p-2 hover:bg-slate-100 text-green-600 rounded-full transition-colors"
-                    >
-                      <Download className="w-5 h-5" />
-                    </button>
-                    <button
-                      onClick={() => setShowDetailedReport(false)}
-                      className="p-2 hover:bg-slate-100 rounded-full transition-colors"
-                    >
-                      <X className="w-5 h-5 text-slate-400" />
-                    </button>
-                  </div>
-                </div>
-
-                <div className="flex-1 overflow-y-auto min-h-0 pr-2">
-                  {loadingDetails ? (
-                    <div className="flex items-center justify-center py-12">
-                      <RefreshCw className="w-8 h-8 text-blue-500 animate-spin" />
-                    </div>
-                  ) : detailedReportData.length === 0 ? (
-                    <div className="text-center py-12 text-slate-500">
-                      No detailed logs available for this date.
-                    </div>
-                  ) : (
-                    <div className="bg-slate-50 rounded-2xl border border-slate-100 overflow-hidden">
-                      <table className="w-full text-left text-sm">
-                        <thead className="bg-slate-100/50 text-slate-500 text-[10px] uppercase tracking-widest sticky top-0 backdrop-blur-md">
-                          <tr>
-                            <th className="px-4 py-3 font-medium">Date</th>
-                            <th className="px-4 py-3 font-medium">ON Time</th>
-                            <th className="px-4 py-3 font-medium">OFF Time</th>
-                            <th className="px-4 py-3 font-medium text-right">
-                              Working Time
-                            </th>
-                          </tr>
-                        </thead>
-                        <tbody className="divide-y divide-slate-100">
-                          {detailedReportData.map((log, i) => (
-                            <tr
-                              key={i}
-                              className="hover:bg-slate-50/50 transition-colors"
-                            >
-                              <td className="px-4 py-3 font-mono text-slate-700">
-                                {new Date(log.onTime).toLocaleDateString(
-                                  "en-US"
-                                )}
-                              </td>
-                              <td className="px-4 py-3 font-mono text-slate-700">
-                                {formatReportDate(log.onTime)}
-                              </td>
-                              <td className="px-4 py-3 font-mono text-slate-700">
-                                {formatReportDate(log.offTime)}
-                              </td>
-                              <td className="px-4 py-3 font-mono text-slate-900 font-medium text-right">
-                                {formatDuration(log.durationMinutes)}
-                              </td>
-                            </tr>
-                          ))}
-                        </tbody>
-                        <tfoot className="bg-slate-100/50 font-bold text-slate-900 border-t-2 border-slate-200 sticky bottom-0">
-                          <tr>
-                            <td
-                              colSpan={3}
-                              className="px-4 py-3 text-right uppercase tracking-widest text-[11px] text-slate-500"
-                            >
-                              Total
-                            </td>
-                            <td className="px-4 py-3 font-mono text-right">
-                              {formatDuration(
-                                detailedReportData.reduce(
-                                  (acc, curr) => acc + curr.durationMinutes,
-                                  0
-                                )
-                              )}
-                            </td>
-                          </tr>
-                        </tfoot>
-                      </table>
-                    </div>
-                  )}
-                </div>
-              </motion.div>
-            </div>
-          )}
-        </AnimatePresence>
+        <DetailedReportModal
+          show={showDetailedReport}
+          onClose={() => setShowDetailedReport(false)}
+          selectedNode={selectedNode || null}
+          startDate={detailedReportStartDate}
+          endDate={detailedReportEndDate}
+          data={detailedReportData}
+          loading={loadingDetails}
+          onStartDateChange={setDetailedReportStartDate}
+          onEndDateChange={setDetailedReportEndDate}
+        />
 
         {/* Log Modal */}
         <AnimatePresence>
