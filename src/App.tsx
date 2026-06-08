@@ -133,14 +133,15 @@ export default function App() {
   const [logs, setLogs] = useState<MaintenanceLog[]>([]);
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const [accessLevel, setAccessLevel] = useState<"Admin" | "Technician">(
-    "Technician",
+    "Technician"
   );
   const [analyticsView, setAnalyticsView] = useState<"Weekly" | "Monthly">(
-    "Weekly",
+    "Weekly"
   );
   const [loading, setLoading] = useState(true);
   const [showLogModal, setShowLogModal] = useState(false);
   const [showSettingsModal, setShowSettingsModal] = useState(false);
+  const [isEditingTelegram, setIsEditingTelegram] = useState(false);
   const [showNotifications, setShowNotifications] = useState(false);
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
   const [isEditingSelectedAlias, setIsEditingSelectedAlias] = useState(false);
@@ -326,7 +327,7 @@ export default function App() {
                 24 *
                 60 *
                 60 *
-                1000,
+                1000
           )
             .toISOString()
             .split("T")[0], // Approximation for click handler
@@ -348,7 +349,7 @@ export default function App() {
         setLoadingDetails(true);
         try {
           const details = await fetchJson(
-            `/api/nodes/${selectedNodeId}/telemetry/details?startDate=${detailedReportStartDate}&endDate=${detailedReportEndDate}`,
+            `/api/nodes/${selectedNodeId}/telemetry/details?startDate=${detailedReportStartDate}&endDate=${detailedReportEndDate}`
           );
           setDetailedReportData(details || []);
         } catch (err) {
@@ -385,7 +386,7 @@ export default function App() {
       if (data) {
         const configObj = data.reduce(
           (acc: any, curr: any) => ({ ...acc, [curr.key]: curr.value }),
-          {},
+          {}
         );
         setConfig(configObj);
       }
@@ -484,7 +485,7 @@ export default function App() {
   }
 
   const sinceDate = new Date(
-    selectedNode.lifetime_anchor_date,
+    selectedNode.lifetime_anchor_date
   ).toLocaleDateString("en-US", {
     month: "short",
     day: "2-digit",
@@ -554,7 +555,7 @@ export default function App() {
                             onClick={() => markNotificationAsRead(n.id)}
                             className={cn(
                               "p-4 border-b border-slate-50 last:border-0 hover:bg-slate-50 transition-colors cursor-pointer flex gap-3",
-                              !n.is_read && "bg-blue-50/50",
+                              !n.is_read && "bg-blue-50/50"
                             )}
                           >
                             <div
@@ -562,7 +563,7 @@ export default function App() {
                                 "w-8 h-8 rounded-full flex items-center justify-center shrink-0",
                                 n.type === "safety"
                                   ? "bg-red-100 text-red-600"
-                                  : "bg-blue-100 text-blue-600",
+                                  : "bg-blue-100 text-blue-600"
                               )}
                             >
                               {n.type === "safety" ? (
@@ -586,7 +587,7 @@ export default function App() {
                                     minute: "2-digit",
                                     second: "2-digit",
                                     hour12: true,
-                                  },
+                                  }
                                 )}
                               </span>
                             </div>
@@ -659,7 +660,7 @@ export default function App() {
             <div
               className={cn(
                 "px-6 py-4 flex items-center justify-between transition-opacity duration-200",
-                isSidebarCollapsed ? "opacity-0" : "opacity-100",
+                isSidebarCollapsed ? "opacity-0" : "opacity-100"
               )}
             >
               <span className="text-[11px] font-bold text-slate-500 uppercase tracking-widest">
@@ -687,7 +688,7 @@ export default function App() {
                         : "gap-3",
                       selectedNodeId === node.id
                         ? "bg-[#e0e7ff] border-blue-600 text-blue-900"
-                        : "border-transparent hover:bg-slate-50 text-slate-700",
+                        : "border-transparent hover:bg-slate-50 text-slate-700"
                     )}
                     title={
                       isSidebarCollapsed ? node.alias || node.id : undefined
@@ -698,7 +699,7 @@ export default function App() {
                         "w-2.5 h-2.5 rounded-full shrink-0 shadow-sm",
                         node.status === "online"
                           ? "bg-green-500"
-                          : "bg-slate-300",
+                          : "bg-slate-300"
                       )}
                     />
                     {!isSidebarCollapsed && (
@@ -974,7 +975,7 @@ export default function App() {
                     "px-6 py-1.5 rounded-full text-sm font-medium transition-colors border",
                     analyticsView === "Weekly"
                       ? "bg-[#e0e7ff] text-blue-700 border-blue-200"
-                      : "bg-transparent text-slate-400 border-transparent hover:text-slate-600",
+                      : "bg-transparent text-slate-400 border-transparent hover:text-slate-600"
                   )}
                 >
                   Weekly
@@ -985,7 +986,7 @@ export default function App() {
                     "text-sm font-medium transition-colors",
                     analyticsView === "Monthly"
                       ? "text-slate-800"
-                      : "text-slate-400 hover:text-slate-600",
+                      : "text-slate-400 hover:text-slate-600"
                   )}
                 >
                   Monthly
@@ -1001,7 +1002,7 @@ export default function App() {
               "w-full py-3 rounded-full font-medium text-sm transition-colors",
               accessLevel === "Admin"
                 ? "bg-slate-200 text-slate-700 hover:bg-slate-300"
-                : "bg-slate-100 text-slate-400 cursor-not-allowed",
+                : "bg-slate-100 text-slate-400 cursor-not-allowed"
             )}
           >
             Reset Lifetime Counter
@@ -1034,12 +1035,24 @@ export default function App() {
                   </button>
                 </div>
                 <div className="space-y-4">
+                  <div className="flex items-center justify-between">
+                    <h4 className="text-sm font-bold text-slate-700">
+                      Telegram Bot Integration
+                    </h4>
+                    <button
+                      onClick={() => setIsEditingTelegram(!isEditingTelegram)}
+                      className="text-xs font-bold text-blue-600 bg-blue-50 px-3 py-1.5 rounded-lg hover:bg-blue-100 transition"
+                    >
+                      {isEditingTelegram ? "Lock" : "Edit"}
+                    </button>
+                  </div>
                   <div className="space-y-1">
                     <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">
                       Telegram Bot Token
                     </label>
                     <input
-                      type="text"
+                      type="password"
+                      readOnly={!isEditingTelegram}
                       value={config.telegram_bot_token || ""}
                       onChange={(e) => {
                         setConfig({
@@ -1048,7 +1061,7 @@ export default function App() {
                         });
                         handleSaveConfig("telegram_bot_token", e.target.value);
                       }}
-                      className="w-full px-4 py-3 bg-slate-50 border border-slate-100 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20"
+                      className={`w-full px-4 py-3 border rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20 ${!isEditingTelegram ? "bg-slate-100 border-transparent text-slate-500 cursor-not-allowed" : "bg-slate-50 border-slate-100"}`}
                     />
                   </div>
                   <div className="space-y-1">
@@ -1056,7 +1069,8 @@ export default function App() {
                       Telegram Chat ID
                     </label>
                     <input
-                      type="text"
+                      type={isEditingTelegram ? "text" : "password"}
+                      readOnly={!isEditingTelegram}
                       value={config.telegram_chat_id || ""}
                       onChange={(e) => {
                         setConfig({
@@ -1065,7 +1079,7 @@ export default function App() {
                         });
                         handleSaveConfig("telegram_chat_id", e.target.value);
                       }}
-                      className="w-full px-4 py-3 bg-slate-50 border border-slate-100 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20"
+                      className={`w-full px-4 py-3 border rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20 ${!isEditingTelegram ? "bg-slate-100 border-transparent text-slate-500 cursor-not-allowed" : "bg-slate-50 border-slate-100"}`}
                     />
                   </div>
                   <div className="space-y-1">
@@ -1082,7 +1096,7 @@ export default function App() {
                         });
                         handleSaveConfig(
                           "watchdog_timeout_min",
-                          e.target.value,
+                          e.target.value
                         );
                       }}
                       className="w-full px-4 py-3 bg-slate-50 border border-slate-100 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20"
@@ -1140,6 +1154,31 @@ export default function App() {
                         className="w-full px-4 py-3 bg-slate-50 border border-slate-100 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20"
                       />
                     </div>
+                  </div>
+                  <div className="pt-4 mt-2 border-t border-slate-100 flex flex-col gap-2">
+                    <button
+                      onClick={async () => {
+                        try {
+                          const res = await fetchJson("/api/test-telegram", {
+                            method: "POST",
+                          });
+                          if (res?.success)
+                            alert("Test message sent successfully!");
+                        } catch (e: any) {
+                          alert(`Error testing bot: ${e.message}`);
+                        }
+                      }}
+                      className="w-full py-3 bg-[#e0e7ff] text-blue-700 font-bold text-xs rounded-xl uppercase tracking-wider hover:bg-blue-100 transition"
+                    >
+                      Send Test Alert
+                    </button>
+                    <p className="text-xs text-slate-500 mt-2 leading-relaxed">
+                      <span className="font-bold">Note:</span> If your bot
+                      doesn't send notifications organically, ensure the node
+                      has a successful heartbeat first. Background watchdog
+                      checks run every minute and respect the configured shift
+                      hours.
+                    </p>
                   </div>
                 </div>
               </motion.div>
