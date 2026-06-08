@@ -41,6 +41,7 @@ interface Node {
   status: "online" | "offline";
   last_heartbeat: string;
   lifetime_anchor_date: string;
+  xray_active_since?: string | null;
 }
 
 interface TelemetryData {
@@ -1243,8 +1244,8 @@ doc.setTextColor(0);
                   />
                   <Tooltip
                     cursor={{ fill: "#f8fafc" }}
-                    formatter={(val: number) => [
-                      formatDuration(val * 60),
+                    formatter={(val: any) => [
+                      typeof val === "number" ? formatDuration(val * 60) : "N/A",
                       "Duration",
                     ]}
                   />
@@ -1260,7 +1261,7 @@ doc.setTextColor(0);
                         position="top"
                         fill="#64748b"
                         fontSize={11}
-                        formatter={(val: number) => formatDuration(val * 60)}
+                        formatter={(val: any) => typeof val === "number" ? formatDuration(val * 60) : ""}
                       />
                     )}
                   </Bar>
