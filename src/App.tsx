@@ -9,6 +9,7 @@ import {
   AlertTriangle,
   X,
   Settings,
+  Users,
   Menu,
   Pencil,
   Plus,
@@ -41,6 +42,7 @@ import { formatDuration } from "./utils";
 import { fetchJson } from "./api";
 import { AuthCard } from "./components/AuthCard";
 import { DetailedReportModal } from "./components/DetailedReportModal";
+import { UsersModal } from "./components/UsersModal";
 
 export default function App() {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
@@ -141,6 +143,7 @@ export default function App() {
   const [loading, setLoading] = useState(true);
   const [showLogModal, setShowLogModal] = useState(false);
   const [showSettingsModal, setShowSettingsModal] = useState(false);
+  const [showUsersModal, setShowUsersModal] = useState(false);
   const [isEditingTelegram, setIsEditingTelegram] = useState(false);
   const [showNotifications, setShowNotifications] = useState(false);
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
@@ -523,12 +526,22 @@ export default function App() {
               </button>
 
               {accessLevel === "Admin" && (
-                <button
-                  onClick={() => setShowSettingsModal(true)}
-                  className="p-2 hover:bg-slate-100 rounded-full transition-colors relative"
-                >
-                  <Settings className="w-5 h-5 text-slate-400" />
-                </button>
+                <>
+                  <button
+                    onClick={() => setShowUsersModal(true)}
+                    className="p-2 hover:bg-slate-100 rounded-full transition-colors relative"
+                    title="User Management"
+                  >
+                    <Users className="w-5 h-5 text-slate-400" />
+                  </button>
+                  <button
+                    onClick={() => setShowSettingsModal(true)}
+                    className="p-2 hover:bg-slate-100 rounded-full transition-colors relative"
+                    title="System Configuration"
+                  >
+                    <Settings className="w-5 h-5 text-slate-400" />
+                  </button>
+                </>
               )}
 
               <AnimatePresence>
@@ -611,7 +624,11 @@ export default function App() {
                 Status
               </span>
               <span className="text-sm font-bold text-slate-900 font-mono tracking-tight">
-                {selectedNode.status === "online" ? "ACTIVE" : "OFFLINE"}
+                {selectedNode.status === "online"
+                  ? selectedNode.xray_active_since
+                    ? "ACTIVE"
+                    : "INACTIVE"
+                  : "OFFLINE"}
               </span>
             </div>
             <div className="flex flex-col">
@@ -1196,6 +1213,12 @@ export default function App() {
           loading={loadingDetails}
           onStartDateChange={setDetailedReportStartDate}
           onEndDateChange={setDetailedReportEndDate}
+        />
+
+        <UsersModal
+          show={showUsersModal}
+          onClose={() => setShowUsersModal(false)}
+          accessLevel={accessLevel}
         />
 
         {/* Log Modal */}

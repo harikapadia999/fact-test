@@ -85,6 +85,16 @@ db.exec(`
   INSERT OR IGNORE INTO config (key, value) VALUES ('safety_timeout_min', '5');
 `);
 
+const userCount = db
+  .prepare("SELECT COUNT(*) as count FROM users")
+  .get() as any;
+if (userCount.count === 0) {
+  const adminHash = bcrypt.hashSync("admin", 10);
+  db.prepare(
+    "INSERT INTO users (username, password, role) VALUES (?, ?, ?)"
+  ).run("admin@schips.in", adminHash, "Admin");
+}
+
 try {
   db.exec("ALTER TABLE nodes ADD COLUMN alert_offline_sent INTEGER DEFAULT 0;");
 } catch (e) {
@@ -113,6 +123,43 @@ activeNodes.forEach((n: any) => {
 let bot: TelegramBot | null = null;
 let currentBotToken = "";
 
+// A simple queue to avoid hitting Telegram's rate limits (e.g., 1 message per second per chat)
+const telegramQueue: Array<{
+  chatId: string;
+  message: string;
+  retries: number;
+}> = [];
+let isProcessingQueue = false;
+
+const processTelegramQueue = async () => {
+  if (isProcessingQueue || telegramQueue.length === 0 || !bot) return;
+  isProcessingQueue = true;
+
+  while (telegramQueue.length > 0) {
+    const task = telegramQueue[0];
+    try {
+      await bot.sendMessage(task.chatId, task.message);
+      telegramQueue.shift(); // Success, remove from queue
+      await new Promise((resolve) => setTimeout(resolve, 1500)); // Respect Telegram's 1 msg/sec limit per group
+    } catch (err: any) {
+      console.error(
+        "Failed to send Telegram alert, retrying later:",
+        err.message
+      );
+      task.retries += 1;
+      if (task.retries > 5) {
+        console.error("Max retries reached for message. Dropping.");
+        telegramQueue.shift(); // Drop after 5 failed attempts
+      } else {
+        // Wait before retrying (exponential backoff)
+        const delay = Math.pow(2, task.retries) * 1000;
+        await new Promise((resolve) => setTimeout(resolve, delay));
+      }
+    }
+  }
+  isProcessingQueue = false;
+};
+
 const sendAlert = async (
   message: string,
   nodeId?: string,
@@ -137,10 +184,15 @@ const sendAlert = async (
         currentBotToken = token;
       }
       if (bot) {
-        await bot.sendMessage(chatId, `🚨 FACTORY ALERT: ${message}`);
+        telegramQueue.push({
+          chatId,
+          message: `🚨 FACTORY ALERT: ${message}`,
+          retries: 0,
+        });
+        processTelegramQueue(); // Fire and forget
       }
     } catch (err: any) {
-      console.error("Failed to send Telegram alert:", err.message);
+      console.error("Failed to enqueue Telegram alert:", err.message);
     }
   }
 };
@@ -252,7 +304,7 @@ setInterval(() => {
       `
     SELECT id, alias, alert_offline_sent FROM nodes 
     WHERE status = 'online' 
-    AND datetime(last_heartbeat, '+${watchdogTimeout} minutes') < CURRENT_TIMESTAMP
+    AND (last_heartbeat IS NULL OR datetime(last_heartbeat, '+${watchdogTimeout} minutes') < CURRENT_TIMESTAMP)
   `
     )
     .all();
@@ -360,7 +412,21 @@ const requireAdmin = (
 
 app.get("/api/nodes", requireAuth, (req, res) => {
   try {
-    const nodes = db.prepare("SELECT * FROM nodes").all();
+    const rawNodes = db.prepare("SELECT * FROM nodes").all() as any[];
+    const nodes = rawNodes.map((n) => {
+      const fixDate = (d: string | null) => {
+        if (!d) return d;
+        if (typeof d !== "string") return new Date(d).toISOString();
+        if (d.endsWith("Z")) return d;
+        return d.replace(" ", "T") + "Z";
+      };
+      return {
+        ...n,
+        last_heartbeat: fixDate(n.last_heartbeat),
+        lifetime_anchor_date: fixDate(n.lifetime_anchor_date),
+        xray_active_since: fixDate(n.xray_active_since),
+      };
+    });
     res.json(nodes);
   } catch (err: any) {
     console.error("Error fetching nodes:", err);
@@ -513,15 +579,18 @@ app.get("/api/nodes/:id/lifetime-hours", requireAuth, async (req, res) => {
   const { id } = req.params;
 
   try {
-    const row = db
-      .prepare(
-        `
-      SELECT SUM(duration_minutes) / 60.0 as hours
-      FROM telemetry
-      WHERE device_id = ?
-    `
-      )
+    const anchorRow = db
+      .prepare("SELECT lifetime_anchor_date FROM nodes WHERE id = ?")
       .get(id) as any;
+    const anchorDate = anchorRow?.lifetime_anchor_date || null;
+
+    let query = `SELECT SUM(duration_minutes) / 60.0 as hours FROM telemetry WHERE device_id = ?`;
+    const params: any[] = [id];
+    if (anchorDate) {
+      query += ` AND off_time >= ?`;
+      params.push(anchorDate);
+    }
+    const row = db.prepare(query).get(...params) as any;
 
     let hours = row?.hours || 0;
 
@@ -532,7 +601,9 @@ app.get("/api/nodes/:id/lifetime-hours", requireAuth, async (req, res) => {
     if (activeNode?.xray_active_since) {
       const activeStr = new Date(activeNode.xray_active_since).toISOString();
       const activeStart = new Date(activeStr).getTime();
-      hours += (Date.now() - activeStart) / 3600000;
+      if (!anchorDate || activeStart >= new Date(anchorDate).getTime()) {
+        hours += (Date.now() - activeStart) / 3600000;
+      }
     }
 
     res.json({ hours: Number(hours.toFixed(2)) });
@@ -549,9 +620,13 @@ app.get("/api/nodes/:id/logs", requireAuth, (req, res) => {
     .all(req.params.id) as any[];
   const logs = rawLogs.map((l) => ({
     ...l,
-    created_at: l.created_at.endsWith("Z")
+    created_at: !l.created_at
       ? l.created_at
-      : l.created_at.replace(" ", "T") + "Z",
+      : typeof l.created_at !== "string"
+        ? new Date(l.created_at).toISOString()
+        : l.created_at.endsWith("Z")
+          ? l.created_at
+          : l.created_at.replace(" ", "T") + "Z",
   }));
   res.json(logs);
 });
@@ -565,10 +640,50 @@ app.post("/api/nodes/:id/logs", requireAdmin, (req, res) => {
 });
 
 app.post("/api/nodes/:id/reset-lifetime", requireAdmin, (req, res) => {
-  db.prepare(
-    "UPDATE nodes SET lifetime_anchor_date = CURRENT_TIMESTAMP WHERE id = ?"
-  ).run(req.params.id);
-  res.json({ success: true });
+  const { id } = req.params;
+  try {
+    const anchorRow = db
+      .prepare("SELECT lifetime_anchor_date FROM nodes WHERE id = ?")
+      .get(id) as any;
+    const anchorDate = anchorRow?.lifetime_anchor_date || null;
+
+    let query = `SELECT SUM(duration_minutes) / 60.0 as hours FROM telemetry WHERE device_id = ?`;
+    const params: any[] = [id];
+    if (anchorDate) {
+      query += ` AND off_time >= ?`;
+      params.push(anchorDate);
+    }
+    const row = db.prepare(query).get(...params) as any;
+    let hours = row?.hours || 0;
+
+    const activeNode = db
+      .prepare("SELECT xray_active_since FROM nodes WHERE id = ?")
+      .get(id) as any;
+    if (activeNode?.xray_active_since) {
+      const activeStr = new Date(activeNode.xray_active_since).toISOString();
+      const activeStart = new Date(activeStr).getTime();
+      if (!anchorDate || activeStart >= new Date(anchorDate).getTime()) {
+        hours += (Date.now() - activeStart) / 3600000;
+      }
+    }
+
+    db.prepare(
+      "INSERT INTO maintenance_logs (node_id, technician_name, event_type, notes) VALUES (?, ?, ?, ?)"
+    ).run(
+      id,
+      "System Record",
+      "Filament Reset",
+      `Filament lifetime counter was reset. Previous filament operated for ${hours.toFixed(2)} hours.`
+    );
+
+    db.prepare(
+      "UPDATE nodes SET lifetime_anchor_date = CURRENT_TIMESTAMP WHERE id = ?"
+    ).run(id);
+    res.json({ success: true });
+  } catch (err: any) {
+    console.error("Failed to reset lifetime:", err.message);
+    res.status(500).json({ error: "Failed to reset lifetime counter" });
+  }
 });
 
 app.get("/api/database-dump", requireAdmin, (req, res) => {
@@ -595,7 +710,7 @@ app.get("/api/config", requireAdmin, (req, res) => {
 
 app.post("/api/config", requireAdmin, (req, res) => {
   const { key, value } = req.body;
-  if (key && value) {
+  if (key && typeof value !== "undefined") {
     db.prepare("INSERT OR REPLACE INTO config (key, value) VALUES (?, ?)").run(
       key,
       value
@@ -606,6 +721,15 @@ app.post("/api/config", requireAdmin, (req, res) => {
   }
 });
 
+app.post("/api/test-telegram", requireAdmin, async (req, res) => {
+  try {
+    await sendAlert("Manual Test Alert from System UI", undefined, "alert");
+    res.json({ success: true });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.get("/api/notifications", requireAuth, (req, res) => {
   try {
     const rawNotifications = db
@@ -613,9 +737,13 @@ app.get("/api/notifications", requireAuth, (req, res) => {
       .all() as any[];
     const notifications = rawNotifications.map((n) => ({
       ...n,
-      created_at: n.created_at.endsWith("Z")
+      created_at: !n.created_at
         ? n.created_at
-        : n.created_at.replace(" ", "T") + "Z",
+        : typeof n.created_at !== "string"
+          ? new Date(n.created_at).toISOString()
+          : n.created_at.endsWith("Z")
+            ? n.created_at
+            : n.created_at.replace(" ", "T") + "Z",
     }));
     res.json(notifications);
   } catch (err: any) {
@@ -631,29 +759,53 @@ app.post("/api/notifications/:id/read", requireAuth, (req, res) => {
   res.json({ success: true });
 });
 
-app.post("/api/signup", async (req, res) => {
+app.get("/api/users", requireAdmin, (req, res) => {
+  try {
+    const users = db.prepare("SELECT id, username, role FROM users").all();
+    res.json(users);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post("/api/users", requireAdmin, async (req, res) => {
   const { username, password, role } = req.body;
-  if (!username || !password)
-    return res.status(400).json({ error: "Username and password required" });
+  if (!username || !password || !role)
+    return res
+      .status(400)
+      .json({ error: "Username, password and role are required" });
 
   try {
     const hash = await bcrypt.hash(password, 10);
-    const count = db
-      .prepare("SELECT COUNT(*) as count FROM users")
-      .get() as any;
-    let finalRole = "Technician";
-    if (username.toLowerCase() === "admin@schips.in") {
-      finalRole = "Admin";
-    }
-
     db.prepare(
       "INSERT INTO users (username, password, role) VALUES (?, ?, ?)"
-    ).run(username, hash, finalRole);
-    res.json({ success: true, role: finalRole });
+    ).run(username, hash, role);
+    res.json({ success: true, role });
   } catch (err: any) {
     if (err.message.includes("UNIQUE constraint")) {
       return res.status(400).json({ error: "Username already taken" });
     }
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.delete("/api/users/:id", requireAdmin, (req, res) => {
+  try {
+    // Prevent deleting the last admin
+    const adminCount = db
+      .prepare("SELECT COUNT(*) as count FROM users WHERE role = 'Admin'")
+      .get() as any;
+    const deletingUser = db
+      .prepare("SELECT role FROM users WHERE id = ?")
+      .get(req.params.id) as any;
+
+    if (deletingUser?.role === "Admin" && adminCount.count <= 1) {
+      return res.status(400).json({ error: "Cannot delete the last admin" });
+    }
+
+    db.prepare("DELETE FROM users WHERE id = ?").run(req.params.id);
+    res.json({ success: true });
+  } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
 });

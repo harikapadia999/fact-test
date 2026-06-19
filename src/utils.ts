@@ -1,18 +1,43 @@
+export const formatDurationInWords = (minutes: number) => {
+  if (!minutes || minutes <= 0) return "0 seconds";
+  const h = Math.floor(minutes / 60);
+  const m = Math.floor(minutes % 60);
+  const s = Math.round((minutes * 60) % 60);
+
+  const parts = [];
+  if (h > 0) parts.push(`${h} hour${h !== 1 ? "s" : ""}`);
+  if (m > 0) parts.push(`${m} minute${m !== 1 ? "s" : ""}`);
+  if (s > 0) parts.push(`${s} second${s !== 1 ? "s" : ""}`);
+
+  return parts.join(" ") || "0 seconds";
+};
+
+export const formatDurationHHMMSS = (minutes: number) => {
+  if (!minutes || minutes <= 0) return "00:00:00";
+  const h = Math.floor(minutes / 60);
+  const m = Math.floor(minutes % 60);
+  const s = Math.round((minutes * 60) % 60);
+  return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
+};
+
 export const formatDuration = (minutes: number) => {
-  if (minutes === 0) return "0 sec";
-  if (minutes < 1) {
-    return `${Math.round(minutes * 60)} sec`;
-  } else if (minutes < 60) {
-    return `${minutes.toFixed(1)} min`;
-  } else {
-    return `${(minutes / 60).toFixed(2)} hrs`;
-  }
+  if (!minutes || minutes <= 0) return "0 sec";
+  const h = Math.floor(minutes / 60);
+  const m = Math.floor(minutes % 60);
+  const s = Math.round((minutes * 60) % 60);
+
+  const parts = [];
+  if (h > 0) parts.push(`${h}h`);
+  if (m > 0) parts.push(`${m}m`);
+  if (s > 0) parts.push(`${s}s`);
+
+  return parts.join(" ") || "0s";
 };
 
 export const formatReportDate = (
   isoString: string,
   startDate?: string,
-  endDate?: string,
+  endDate?: string
 ) => {
   const d = new Date(isoString);
   if (startDate && endDate && startDate === endDate) {

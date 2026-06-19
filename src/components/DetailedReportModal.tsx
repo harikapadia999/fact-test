@@ -2,7 +2,12 @@ import React from "react";
 import { motion } from "motion/react";
 import { X, FileText, Download, RefreshCw } from "lucide-react";
 import { TelemetryDetails, Node } from "../types";
-import { formatDuration, formatReportDate } from "../utils";
+import {
+  formatDuration,
+  formatReportDate,
+  formatDurationHHMMSS,
+  formatDurationInWords,
+} from "../utils";
 import jsPDF from "jspdf";
 import autoTable from "jspdf-autotable";
 import * as XLSX from "xlsx";
@@ -43,19 +48,31 @@ export function DetailedReportModal({
 
     autoTable(doc, {
       startY: 30,
-      head: [["Date", "ON Time", "OFF Time", "Working Time"]],
+      head: [
+        [
+          "Date",
+          "ON Time",
+          "OFF Time",
+          "Working Time",
+          "Working Time(In Words)",
+        ],
+      ],
       body: data.map((log) => [
         new Date(log.onTime).toLocaleDateString("en-US"),
         formatReportDate(log.onTime, startDate, endDate),
         formatReportDate(log.offTime, startDate, endDate),
-        formatDuration(log.durationMinutes),
+        formatDurationHHMMSS(log.durationMinutes),
+        formatDurationInWords(log.durationMinutes),
       ]),
       foot: [
         [
           "Total",
           "",
           "",
-          formatDuration(
+          formatDurationHHMMSS(
+            data.reduce((acc, curr) => acc + curr.durationMinutes, 0)
+          ),
+          formatDurationInWords(
             data.reduce((acc, curr) => acc + curr.durationMinutes, 0)
           ),
         ],
@@ -71,20 +88,19 @@ export function DetailedReportModal({
       Date: new Date(log.onTime).toLocaleDateString("en-US"),
       "ON Time": formatReportDate(log.onTime, startDate, endDate),
       "OFF Time": formatReportDate(log.offTime, startDate, endDate),
-      "Working Time": formatDuration(log.durationMinutes),
-      "Duration (Min)": log.durationMinutes,
+      "Working Time": formatDurationHHMMSS(log.durationMinutes),
+      "Working Time(In Words)": formatDurationInWords(log.durationMinutes),
     }));
 
     worksheetData.push({
       Date: "Total",
       "ON Time": "",
       "OFF Time": "",
-      "Working Time": formatDuration(
+      "Working Time": formatDurationHHMMSS(
         data.reduce((acc, curr) => acc + curr.durationMinutes, 0)
       ),
-      "Duration (Min)": data.reduce(
-        (acc, curr) => acc + curr.durationMinutes,
-        0
+      "Working Time(In Words)": formatDurationInWords(
+        data.reduce((acc, curr) => acc + curr.durationMinutes, 0)
       ),
     });
 

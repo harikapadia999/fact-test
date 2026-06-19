@@ -71,32 +71,13 @@ export function AuthCard({
             type="submit"
             className="w-full py-3 bg-blue-600 text-white rounded-xl font-bold text-sm tracking-wide mt-2 hover:bg-blue-700 transition-colors"
           >
-            {currentView === "login" ? "Login" : "Sign Up"}
+            Authenticate Session
           </button>
         </form>
 
         <div className="mt-6 text-center text-xs text-slate-500">
-          {currentView === "login" ? (
-            <>
-              Don't have an account?{" "}
-              <span
-                onClick={() => switchView("signup")}
-                className="text-blue-600 font-bold hover:underline cursor-pointer"
-              >
-                Sign Up
-              </span>
-            </>
-          ) : (
-            <>
-              Already have an account?{" "}
-              <span
-                onClick={() => switchView("login")}
-                className="text-blue-600 font-bold hover:underline cursor-pointer"
-              >
-                Login
-              </span>
-            </>
-          )}
+          <p>Sign-ups are restricted.</p>
+          <p>Please contact an Administrator to gain access.</p>
         </div>
       </div>
     </div>
