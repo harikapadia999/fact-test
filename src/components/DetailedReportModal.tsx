@@ -10,7 +10,8 @@ import {
 } from "../utils";
 import jsPDF from "jspdf";
 import autoTable from "jspdf-autotable";
-import * as XLSX from "xlsx";
+import ExcelJS from "exceljs";
+import { saveAs } from "file-saver";
 
 interface DetailedReportModalProps {
   show: boolean;
@@ -83,34 +84,91 @@ export function DetailedReportModal({
     doc.save(`telemetry_report_${selectedNode?.id}_${startDate}.pdf`);
   };
 
-  const exportToExcel = () => {
-    const worksheetData = data.map((log) => ({
-      Date: new Date(log.onTime).toLocaleDateString("en-US"),
-      "ON Time": formatReportDate(log.onTime, startDate, endDate),
-      "OFF Time": formatReportDate(log.offTime, startDate, endDate),
-      "Working Time": formatDurationHHMMSS(log.durationMinutes),
-      "Working Time(In Words)": formatDurationInWords(log.durationMinutes),
-    }));
+  const exportToExcel = async () => {
+    const workbook = new ExcelJS.Workbook();
+    const sheet = workbook.addWorksheet("Telemetry");
 
-    worksheetData.push({
-      Date: "Total",
-      "ON Time": "",
-      "OFF Time": "",
-      "Working Time": formatDurationHHMMSS(
-        data.reduce((acc, curr) => acc + curr.durationMinutes, 0)
-      ),
-      "Working Time(In Words)": formatDurationInWords(
-        data.reduce((acc, curr) => acc + curr.durationMinutes, 0)
-      ),
+    // Add Title and Date Range
+    sheet.addRow([
+      `Telemetry Report for Node: ${selectedNode?.alias || selectedNode?.id}`,
+    ]);
+    sheet.addRow([`Date Range: ${startDate} to ${endDate}`]);
+    sheet.addRow([]); // empty row for spacing
+
+    // Style Title
+    sheet.getCell("A1").font = { size: 16, bold: true };
+    sheet.getCell("A2").font = { size: 14 };
+
+    // Define columns (starting from row 4)
+    const headerRow = sheet.addRow([
+      "Date",
+      "ON Time",
+      "OFF Time",
+      "Working Time",
+      "Working Time(In Words)",
+    ]);
+
+    headerRow.eachCell((cell) => {
+      cell.font = { bold: true, color: { argb: "FFFFFFFF" } };
+      cell.fill = {
+        type: "pattern",
+        pattern: "solid",
+        fgColor: { argb: "FF2980B9" },
+      };
+      cell.alignment = { vertical: "middle", horizontal: "center" };
     });
 
-    const ws = XLSX.utils.json_to_sheet(worksheetData);
-    const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, "Telemetry");
-    XLSX.writeFile(
-      wb,
-      `telemetry_report_${selectedNode?.id}_${startDate}.xlsx`
+    data.forEach((log) => {
+      sheet.addRow([
+        new Date(log.onTime).toLocaleDateString("en-US"),
+        formatReportDate(log.onTime, startDate, endDate),
+        formatReportDate(log.offTime, startDate, endDate),
+        formatDurationHHMMSS(log.durationMinutes),
+        formatDurationInWords(log.durationMinutes),
+      ]);
+    });
+
+    const totalMinutes = data.reduce(
+      (acc, curr) => acc + curr.durationMinutes,
+      0
     );
+    const totalRow = sheet.addRow([
+      "Total",
+      "",
+      "",
+      formatDurationHHMMSS(totalMinutes),
+      formatDurationInWords(totalMinutes),
+    ]);
+
+    totalRow.eachCell((cell) => {
+      cell.font = { bold: true, color: { argb: "FFFFFFFF" } };
+      cell.fill = {
+        type: "pattern",
+        pattern: "solid",
+        fgColor: { argb: "FF2980B9" },
+      };
+    });
+
+    // Auto-fit columns
+    sheet.columns.forEach((column, index) => {
+      let maxLength = 0;
+      // skip the first 3 rows for length calculation
+      column.eachCell({ includeEmpty: true }, (cell, rowNumber) => {
+        if (rowNumber > 3) {
+          const columnLength = cell.value ? cell.value.toString().length : 10;
+          if (columnLength > maxLength) {
+            maxLength = columnLength;
+          }
+        }
+      });
+      column.width = maxLength < 10 ? 10 : maxLength + 2;
+    });
+
+    const buffer = (await workbook.xlsx.writeBuffer()) as ArrayBuffer;
+    const blob = new Blob([buffer], {
+      type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    });
+    saveAs(blob, `telemetry_report_${selectedNode?.id}_${startDate}.xlsx`);
   };
 
   return (
