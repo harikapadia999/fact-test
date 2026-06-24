@@ -89,7 +89,7 @@ const userCount = db
   .prepare("SELECT COUNT(*) as count FROM users")
   .get() as any;
 if (userCount.count === 0) {
-  const adminHash = bcrypt.hashSync("admin", 10);
+  const adminHash = bcrypt.hashSync("admin@123", 10);
   db.prepare(
     "INSERT INTO users (username, password, role) VALUES (?, ?, ?)"
   ).run("admin@schips.in", adminHash, "Admin");
@@ -221,9 +221,7 @@ mqttClient.on("error", (err) => {
 
 mqttClient.on("offline", () => {
   if (!(mqttClient as any)._offlineLogged) {
-    console.log(
-      "⚠️  MQTT Client Offline. Note: AI Studio runs in the cloud. If your broker is on a local IP (e.g., 192.168.x.x), it cannot connect unless you expose it via ngrok or use a public broker."
-    );
+    console.log("⚠️  MQTT Client Offline.");
     (mqttClient as any)._offlineLogged = true;
   }
 });
@@ -398,10 +396,7 @@ const requireAdmin = (
   next: express.NextFunction
 ) => {
   requireAuth(req, res, () => {
-    if (
-      (req as any).user?.role !== "Admin" ||
-      (req as any).user?.username?.toLowerCase() !== "admin@schips.in"
-    ) {
+    if ((req as any).user?.role !== "Admin") {
       return res
         .status(403)
         .json({ error: "Forbidden: Admin access required" });
@@ -494,7 +489,9 @@ app.get("/api/nodes/:id/telemetry", requireAuth, async (req, res) => {
       datesMap.set(ymd, 0);
     }
     for (const row of records) {
-      if (row.date) datesMap.set(row.date, row.hours);
+      if (row.date && datesMap.has(row.date)) {
+        datesMap.set(row.date, row.hours);
+      }
     }
 
     const activeNode = db
@@ -510,14 +507,20 @@ app.get("/api/nodes/:id/telemetry", requireAuth, async (req, res) => {
       }
     }
 
-    const result = Array.from(datesMap.entries()).map(([dateStr, hours]) => {
-      const d = new Date(dateStr);
-      return {
-        rawDate: dateStr,
-        date: d.toLocaleDateString("en-US", { month: "short", day: "numeric" }),
-        hours: Number(hours.toFixed(2)),
-      };
-    });
+    const result = Array.from(datesMap.entries())
+      .map(([dateStr, hours]) => {
+        const d = new Date(dateStr);
+        return {
+          rawDate: dateStr,
+          date: d.toLocaleDateString("en-US", {
+            month: "short",
+            day: "numeric",
+          }),
+          hours: Number(hours.toFixed(2)),
+        };
+      })
+      .sort((a, b) => a.rawDate.localeCompare(b.rawDate))
+      .slice(-days);
 
     res.json(result);
   } catch (err: any) {
@@ -777,10 +780,11 @@ app.post("/api/users", requireAdmin, async (req, res) => {
 
   try {
     const hash = await bcrypt.hash(password, 10);
+    const parsedRole = role.toLowerCase() === "admin" ? "Admin" : "Technician";
     db.prepare(
       "INSERT INTO users (username, password, role) VALUES (?, ?, ?)"
-    ).run(username, hash, role);
-    res.json({ success: true, role });
+    ).run(username, hash, parsedRole);
+    res.json({ success: true, role: parsedRole });
   } catch (err: any) {
     if (err.message.includes("UNIQUE constraint")) {
       return res.status(400).json({ error: "Username already taken" });
@@ -810,6 +814,21 @@ app.delete("/api/users/:id", requireAdmin, (req, res) => {
   }
 });
 
+app.put("/api/users/:id/password", requireAdmin, async (req, res) => {
+  const { password } = req.body;
+  if (!password) return res.status(400).json({ error: "Password is required" });
+  try {
+    const hash = await bcrypt.hash(password, 10);
+    db.prepare("UPDATE users SET password = ? WHERE id = ?").run(
+      hash,
+      Number(req.params.id)
+    );
+    res.json({ success: true });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.post("/api/login", async (req, res) => {
   const { username, password } = req.body;
   if (!username || !password)
@@ -817,16 +836,17 @@ app.post("/api/login", async (req, res) => {
 
   const user = db
     .prepare(
-      "SELECT id, username, password, role FROM users WHERE username = ?"
+      "SELECT id, username, password, role FROM users WHERE LOWER(username) = LOWER(?)"
     )
     .get(username) as any;
 
   if (user && (await bcrypt.compare(password, user.password))) {
-    const activeRole =
-      user.username.toLowerCase() === "admin@schips.in"
-        ? "Admin"
-        : "Technician";
-    if (user.role !== activeRole) {
+    let activeRole = user.role === "admin" ? "Admin" : user.role;
+    if (
+      user.username.toLowerCase() === "admin@schips.in" &&
+      activeRole !== "Admin"
+    ) {
+      activeRole = "Admin";
       db.prepare("UPDATE users SET role = ? WHERE id = ?").run(
         activeRole,
         user.id
@@ -849,6 +869,9 @@ app.post("/api/login", async (req, res) => {
       user: { username: user.username, role: activeRole },
     });
   } else {
+    console.log(
+      `Failed login for user: ${username}, password: ${password}, user found: ${!!user}`
+    );
     res.status(401).json({ error: "Invalid credentials" });
   }
 });
