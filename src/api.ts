@@ -1,5 +1,3 @@
-import { formatDuration } from "../utils";
-
 export const fetchJson = async (url: string, options: RequestInit = {}) => {
   const token = localStorage.getItem("token");
   const headers = new Headers(options.headers || {});

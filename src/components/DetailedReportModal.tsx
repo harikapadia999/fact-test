@@ -1,6 +1,6 @@
-import React from "react";
-import { motion } from "motion/react";
-import { X, FileText, Download, RefreshCw } from "lucide-react";
+import React, { useState, useEffect } from "react";
+import { motion, AnimatePresence } from "motion/react";
+import { X, FileText, Download, RefreshCw, History } from "lucide-react";
 import { TelemetryDetails, Node } from "../types";
 import {
   formatDuration,
@@ -12,6 +12,7 @@ import jsPDF from "jspdf";
 import autoTable from "jspdf-autotable";
 import ExcelJS from "exceljs";
 import { saveAs } from "file-saver";
+import { fetchJson } from "../api";
 
 interface DetailedReportModalProps {
   show: boolean;
@@ -23,6 +24,7 @@ interface DetailedReportModalProps {
   loading: boolean;
   onStartDateChange: (date: string) => void;
   onEndDateChange: (date: string) => void;
+  accessLevel: string;
 }
 
 export function DetailedReportModal({
@@ -35,7 +37,37 @@ export function DetailedReportModal({
   loading,
   onStartDateChange,
   onEndDateChange,
+  accessLevel,
 }: DetailedReportModalProps) {
+  const [activeTab, setActiveTab] = useState<"telemetry" | "filament">(
+    "telemetry"
+  );
+  const [filamentHistory, setFilamentHistory] = useState<any[]>([]);
+  const [loadingHistory, setLoadingHistory] = useState(false);
+
+  useEffect(() => {
+    if (show && selectedNode && activeTab === "filament") {
+      fetchFilamentHistory();
+    }
+  }, [show, selectedNode, activeTab]);
+
+  const fetchFilamentHistory = async () => {
+    if (!selectedNode) return;
+    setLoadingHistory(true);
+    try {
+      const history = await fetchJson(
+        `/api/nodes/${selectedNode.id}/filament-history`,
+        {
+          headers: { "x-access-level": accessLevel },
+        }
+      );
+      setFilamentHistory(history || []);
+    } catch (err) {
+      console.error("Failed to fetch filament history:", err);
+    } finally {
+      setLoadingHistory(false);
+    }
+  };
   if (!show) return null;
 
   const exportToPDF = () => {
@@ -191,26 +223,28 @@ export function DetailedReportModal({
             <h3 className="text-xl font-black text-slate-800">
               Detailed Report
             </h3>
-            <div className="mt-3 flex items-center gap-2">
-              <label className="text-sm text-slate-500 font-medium">
-                Start Date:
-              </label>
-              <input
-                type="date"
-                value={startDate}
-                onChange={(e) => onStartDateChange(e.target.value)}
-                className="text-sm border border-slate-200 rounded-lg px-3 py-1.5 text-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500 bg-slate-50"
-              />
-              <label className="text-sm text-slate-500 font-medium ml-2">
-                End Date:
-              </label>
-              <input
-                type="date"
-                value={endDate}
-                onChange={(e) => onEndDateChange(e.target.value)}
-                className="text-sm border border-slate-200 rounded-lg px-3 py-1.5 text-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500 bg-slate-50"
-              />
-            </div>
+            {activeTab === "telemetry" && (
+              <div className="mt-3 flex items-center gap-2">
+                <label className="text-sm text-slate-500 font-medium">
+                  Start Date:
+                </label>
+                <input
+                  type="date"
+                  value={startDate}
+                  onChange={(e) => onStartDateChange(e.target.value)}
+                  className="text-sm border border-slate-200 rounded-lg px-3 py-1.5 text-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500 bg-slate-50"
+                />
+                <label className="text-sm text-slate-500 font-medium ml-2">
+                  End Date:
+                </label>
+                <input
+                  type="date"
+                  value={endDate}
+                  onChange={(e) => onEndDateChange(e.target.value)}
+                  className="text-sm border border-slate-200 rounded-lg px-3 py-1.5 text-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500 bg-slate-50"
+                />
+              </div>
+            )}
           </div>
           <div className="flex gap-2">
             <button
@@ -237,66 +271,129 @@ export function DetailedReportModal({
         </div>
 
         <div className="flex-1 overflow-y-auto min-h-0 pr-2">
-          {loading ? (
+          <div className="flex border-b border-slate-200 mb-4 sticky top-0 bg-white z-10 pt-2">
+            <button
+              className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${activeTab === "telemetry" ? "border-blue-600 text-blue-600" : "border-transparent text-slate-500 hover:text-slate-700"}`}
+              onClick={() => setActiveTab("telemetry")}
+            >
+              Telemetry Data
+            </button>
+            <button
+              id="tab-filament"
+              className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors flex items-center gap-1 ${activeTab === "filament" ? "border-blue-600 text-blue-600" : "border-transparent text-slate-500 hover:text-slate-700"}`}
+              onClick={() => setActiveTab("filament")}
+            >
+              <History className="w-4 h-4" />
+              Filament History
+            </button>
+          </div>
+
+          {activeTab === "telemetry" ? (
+            loading ? (
+              <div className="flex items-center justify-center py-12">
+                <RefreshCw className="w-8 h-8 text-blue-500 animate-spin" />
+              </div>
+            ) : data.length === 0 ? (
+              <div className="text-center py-12 text-slate-500">
+                No detailed logs available for this date range.
+              </div>
+            ) : (
+              <div className="bg-slate-50 rounded-2xl border border-slate-100 overflow-hidden">
+                <table className="w-full text-left text-sm">
+                  <thead className="bg-slate-100/50 text-slate-500 text-[10px] uppercase tracking-widest sticky top-0 backdrop-blur-md">
+                    <tr>
+                      <th className="px-4 py-3 font-medium">Date</th>
+                      <th className="px-4 py-3 font-medium">ON Time</th>
+                      <th className="px-4 py-3 font-medium">OFF Time</th>
+                      <th className="px-4 py-3 font-medium text-right">
+                        Working Time
+                      </th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {data.map((log, i) => (
+                      <tr
+                        key={i}
+                        className="hover:bg-slate-50/50 transition-colors"
+                      >
+                        <td className="px-4 py-3 font-mono text-slate-700">
+                          {new Date(log.onTime).toLocaleDateString("en-US")}
+                        </td>
+                        <td className="px-4 py-3 font-mono text-slate-700">
+                          {formatReportDate(log.onTime, startDate, endDate)}
+                        </td>
+                        <td className="px-4 py-3 font-mono text-slate-700">
+                          {formatReportDate(log.offTime, startDate, endDate)}
+                        </td>
+                        <td className="px-4 py-3 font-mono text-slate-900 font-medium text-right">
+                          {formatDuration(log.durationMinutes)}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                  <tfoot className="bg-slate-100/50 font-bold text-slate-900 border-t-2 border-slate-200 sticky bottom-0">
+                    <tr>
+                      <td
+                        colSpan={3}
+                        className="px-4 py-3 text-right uppercase tracking-widest text-[11px] text-slate-500"
+                      >
+                        Total
+                      </td>
+                      <td className="px-4 py-3 font-mono text-right">
+                        {formatDuration(
+                          data.reduce(
+                            (acc, curr) => acc + curr.durationMinutes,
+                            0
+                          )
+                        )}
+                      </td>
+                    </tr>
+                  </tfoot>
+                </table>
+              </div>
+            )
+          ) : loadingHistory ? (
             <div className="flex items-center justify-center py-12">
               <RefreshCw className="w-8 h-8 text-blue-500 animate-spin" />
             </div>
-          ) : data.length === 0 ? (
+          ) : filamentHistory.length === 0 ? (
             <div className="text-center py-12 text-slate-500">
-              No detailed logs available for this date range.
+              No filament history available for this node.
             </div>
           ) : (
             <div className="bg-slate-50 rounded-2xl border border-slate-100 overflow-hidden">
               <table className="w-full text-left text-sm">
                 <thead className="bg-slate-100/50 text-slate-500 text-[10px] uppercase tracking-widest sticky top-0 backdrop-blur-md">
                   <tr>
-                    <th className="px-4 py-3 font-medium">Date</th>
-                    <th className="px-4 py-3 font-medium">ON Time</th>
-                    <th className="px-4 py-3 font-medium">OFF Time</th>
-                    <th className="px-4 py-3 font-medium text-right">
-                      Working Time
+                    <th className="px-4 py-3 font-medium">Reset Date</th>
+                    <th className="px-4 py-3 font-medium">
+                      Total Operating Time
                     </th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
-                  {data.map((log, i) => (
+                  {filamentHistory.map((item, index) => (
                     <tr
-                      key={i}
+                      key={index}
                       className="hover:bg-slate-50/50 transition-colors"
                     >
                       <td className="px-4 py-3 font-mono text-slate-700">
-                        {new Date(log.onTime).toLocaleDateString("en-US")}
+                        {new Date(
+                          item.reset_date.replace(" ", "T") + "Z"
+                        ).toLocaleString("en-US", {
+                          year: "numeric",
+                          month: "short",
+                          day: "numeric",
+                          hour: "2-digit",
+                          minute: "2-digit",
+                        })}
                       </td>
-                      <td className="px-4 py-3 font-mono text-slate-700">
-                        {formatReportDate(log.onTime, startDate, endDate)}
-                      </td>
-                      <td className="px-4 py-3 font-mono text-slate-700">
-                        {formatReportDate(log.offTime, startDate, endDate)}
-                      </td>
-                      <td className="px-4 py-3 font-mono text-slate-900 font-medium text-right">
-                        {formatDuration(log.durationMinutes)}
+                      <td className="px-4 py-3 font-mono text-slate-900 font-medium">
+                        {formatDurationInWords(item.hours_operated * 60)}
                       </td>
                     </tr>
                   ))}
                 </tbody>
-                <tfoot className="bg-slate-100/50 font-bold text-slate-900 border-t-2 border-slate-200 sticky bottom-0">
-                  <tr>
-                    <td
-                      colSpan={3}
-                      className="px-4 py-3 text-right uppercase tracking-widest text-[11px] text-slate-500"
-                    >
-                      Total
-                    </td>
-                    <td className="px-4 py-3 font-mono text-right">
-                      {formatDuration(
-                        data.reduce(
-                          (acc, curr) => acc + curr.durationMinutes,
-                          0
-                        )
-                      )}
-                    </td>
-                  </tr>
-                </tfoot>
               </table>
             </div>
           )}

@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from "react";
 import { motion, AnimatePresence } from "motion/react";
-import { X, Trash2, UserPlus, Users } from "lucide-react";
+import { X, Trash2, UserPlus, Users, Key } from "lucide-react";
 import { fetchJson } from "../api";
 
 interface UsersModalProps {
@@ -15,6 +15,10 @@ export function UsersModal({ show, onClose, accessLevel }: UsersModalProps) {
   const [newPassword, setNewPassword] = useState("");
   const [newRole, setNewRole] = useState("Technician");
   const [error, setError] = useState<string | null>(null);
+  const [editingPasswordId, setEditingPasswordId] = useState<number | null>(
+    null
+  );
+  const [editPasswordValue, setEditPasswordValue] = useState("");
 
   const fetchUsers = async () => {
     try {
@@ -66,6 +70,25 @@ export function UsersModal({ show, onClose, accessLevel }: UsersModalProps) {
         },
       });
       fetchUsers();
+    } catch (err: any) {
+      alert(err.message);
+    }
+  };
+
+  const handleChangePassword = async (id: number) => {
+    if (!editPasswordValue) return;
+    try {
+      await fetchJson(`/api/users/${id}/password`, {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+          "x-access-level": accessLevel,
+        },
+        body: JSON.stringify({ password: editPasswordValue }),
+      });
+      setEditingPasswordId(null);
+      setEditPasswordValue("");
+      alert("Password updated successfully");
     } catch (err: any) {
       alert(err.message);
     }
@@ -170,23 +193,58 @@ export function UsersModal({ show, onClose, accessLevel }: UsersModalProps) {
               {users.map((user: any) => (
                 <div
                   key={user.id}
-                  className="p-4 rounded-xl border border-slate-100 bg-slate-50 flex items-center justify-between"
+                  className="p-4 rounded-xl border border-slate-100 bg-slate-50 flex flex-col gap-2"
                 >
-                  <div>
-                    <p className="font-bold text-slate-800 tracking-tight text-sm">
-                      {user.username}
-                    </p>
-                    <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mt-0.5">
-                      {user.role}
-                    </p>
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <p className="font-bold text-slate-800 tracking-tight text-sm">
+                        {user.username}
+                      </p>
+                      <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mt-0.5">
+                        {user.role}
+                      </p>
+                    </div>
+                    <div className="flex items-center gap-1">
+                      <button
+                        onClick={() => {
+                          setEditingPasswordId(
+                            editingPasswordId === user.id ? null : user.id
+                          );
+                          setEditPasswordValue("");
+                        }}
+                        className="p-2 text-slate-400 hover:text-blue-500 hover:bg-blue-50 rounded-lg transition"
+                        title="Change Password"
+                      >
+                        <Key className="w-4 h-4" />
+                      </button>
+                      <button
+                        onClick={() => handleDeleteUser(user.id)}
+                        className="p-2 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition"
+                        title="Delete User"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                    </div>
                   </div>
-                  <button
-                    onClick={() => handleDeleteUser(user.id)}
-                    className="p-2 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition"
-                    title="Delete User"
-                  >
-                    <Trash2 className="w-4 h-4" />
-                  </button>
+
+                  {editingPasswordId === user.id && (
+                    <div className="flex items-center gap-2 mt-2 pt-2 border-t border-slate-200">
+                      <input
+                        type="text"
+                        placeholder="New Password"
+                        value={editPasswordValue}
+                        onChange={(e) => setEditPasswordValue(e.target.value)}
+                        className="flex-1 px-3 py-1.5 bg-white border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20"
+                      />
+                      <button
+                        onClick={() => handleChangePassword(user.id)}
+                        disabled={!editPasswordValue}
+                        className="px-3 py-1.5 bg-blue-600 text-white rounded-lg text-xs font-bold disabled:opacity-50"
+                      >
+                        Save
+                      </button>
+                    </div>
+                  )}
                 </div>
               ))}
               {users.length === 0 && (
