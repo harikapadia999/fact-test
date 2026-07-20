@@ -7,6 +7,7 @@ import {
   formatReportDate,
   formatDurationHHMMSS,
   formatDurationInWords,
+  formatDateDMY,
 } from "../utils";
 import jsPDF from "jspdf";
 import autoTable from "jspdf-autotable";
@@ -91,7 +92,7 @@ export function DetailedReportModal({
         ],
       ],
       body: data.map((log) => [
-        new Date(log.onTime).toLocaleDateString("en-US"),
+        formatDateDMY(log.onTime),
         formatReportDate(log.onTime, startDate, endDate),
         formatReportDate(log.offTime, startDate, endDate),
         formatDurationHHMMSS(log.durationMinutes),
@@ -152,7 +153,7 @@ export function DetailedReportModal({
 
     data.forEach((log) => {
       sheet.addRow([
-        new Date(log.onTime).toLocaleDateString("en-US"),
+        formatDateDMY(log.onTime),
         formatReportDate(log.onTime, startDate, endDate),
         formatReportDate(log.offTime, startDate, endDate),
         formatDurationHHMMSS(log.durationMinutes),
@@ -181,10 +182,101 @@ export function DetailedReportModal({
       };
     });
 
-    // Auto-fit columns
-    sheet.columns.forEach((column, index) => {
+    // Auto-fit columns for detailed telemetry sheet
+    sheet.columns.forEach((column) => {
       let maxLength = 0;
-      // skip the first 3 rows for length calculation
+      column.eachCell({ includeEmpty: true }, (cell, rowNumber) => {
+        if (rowNumber > 3) {
+          const columnLength = cell.value ? cell.value.toString().length : 10;
+          if (columnLength > maxLength) {
+            maxLength = columnLength;
+          }
+        }
+      });
+      column.width = maxLength < 10 ? 10 : maxLength + 2;
+    });
+
+    // Create "Day-wise Summary" Worksheet
+    const summarySheet = workbook.addWorksheet("Day-wise Summary");
+    summarySheet.addRow([
+      `Telemetry Report for Node: ${selectedNode?.alias || selectedNode?.id}`,
+    ]);
+    summarySheet.addRow([`Date Range: ${startDate} to ${endDate}`]);
+    summarySheet.addRow([]);
+
+    summarySheet.getCell("A1").font = { size: 16, bold: true };
+    summarySheet.getCell("A2").font = { size: 14 };
+
+    const summaryHeader = summarySheet.addRow([
+      "Date",
+      "Working Time",
+      "Working Time(In Words)",
+    ]);
+
+    summaryHeader.eachCell((cell) => {
+      cell.font = { bold: true, color: { argb: "FFFFFFFF" } };
+      cell.fill = {
+        type: "pattern",
+        pattern: "solid",
+        fgColor: { argb: "FF2980B9" },
+      };
+      cell.alignment = { vertical: "middle", horizontal: "center" };
+    });
+
+    // Group by Date (formatted as YYYY-MM-DD in Asia/Kolkata timezone)
+    const dayMap = new Map<string, number>();
+    data.forEach((log) => {
+      const d = new Date(log.onTime);
+      const parts = new Intl.DateTimeFormat("en-US", {
+        timeZone: "Asia/Kolkata",
+        day: "2-digit",
+        month: "2-digit",
+        year: "numeric",
+      }).formatToParts(d);
+      const day = parts.find((p) => p.type === "day")?.value || "";
+      const month = parts.find((p) => p.type === "month")?.value || "";
+      const year = parts.find((p) => p.type === "year")?.value || "";
+      const ymdStr = `${year}-${month}-${day}`;
+      dayMap.set(ymdStr, (dayMap.get(ymdStr) || 0) + log.durationMinutes);
+    });
+
+    // Sort chronologically
+    const sortedDays = Array.from(dayMap.entries()).sort((a, b) => {
+      return a[0].localeCompare(b[0]);
+    });
+
+    sortedDays.forEach(([ymdStr, mins]) => {
+      const [y, m, d] = ymdStr.split("-");
+      const dmyStr = `${d}/${m}/${y}`;
+      summarySheet.addRow([
+        dmyStr,
+        formatDurationHHMMSS(mins),
+        formatDurationInWords(mins),
+      ]);
+    });
+
+    const totalSummaryMinutes = sortedDays.reduce(
+      (acc, curr) => acc + curr[1],
+      0
+    );
+    const totalSummaryRow = summarySheet.addRow([
+      "Total",
+      formatDurationHHMMSS(totalSummaryMinutes),
+      formatDurationInWords(totalSummaryMinutes),
+    ]);
+
+    totalSummaryRow.eachCell((cell) => {
+      cell.font = { bold: true, color: { argb: "FFFFFFFF" } };
+      cell.fill = {
+        type: "pattern",
+        pattern: "solid",
+        fgColor: { argb: "FF2980B9" },
+      };
+    });
+
+    // Auto-fit columns for summary sheet
+    summarySheet.columns.forEach((column) => {
+      let maxLength = 0;
       column.eachCell({ includeEmpty: true }, (cell, rowNumber) => {
         if (rowNumber > 3) {
           const columnLength = cell.value ? cell.value.toString().length : 10;
@@ -317,7 +409,7 @@ export function DetailedReportModal({
                         className="hover:bg-slate-50/50 transition-colors"
                       >
                         <td className="px-4 py-3 font-mono text-slate-700">
-                          {new Date(log.onTime).toLocaleDateString("en-US")}
+                          {formatDateDMY(log.onTime)}
                         </td>
                         <td className="px-4 py-3 font-mono text-slate-700">
                           {formatReportDate(log.onTime, startDate, endDate)}

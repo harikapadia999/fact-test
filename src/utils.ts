@@ -41,7 +41,10 @@ export const formatReportDate = (
 ) => {
   const d = new Date(isoString);
   if (startDate && endDate && startDate === endDate) {
-    return d.toLocaleTimeString("en-US", { hour12: false });
+    return d.toLocaleTimeString("en-US", {
+      hour12: false,
+      timeZone: "Asia/Kolkata",
+    });
   }
   return d.toLocaleString("en-US", {
     month: "short",
@@ -50,5 +53,25 @@ export const formatReportDate = (
     minute: "2-digit",
     second: "2-digit",
     hour12: false,
+    timeZone: "Asia/Kolkata",
   });
+};
+
+export const formatDateDMY = (dateInput: string | Date | number) => {
+  try {
+    const d = new Date(dateInput);
+    if (isNaN(d.getTime())) return "";
+    const parts = new Intl.DateTimeFormat("en-US", {
+      timeZone: "Asia/Kolkata",
+      day: "2-digit",
+      month: "2-digit",
+      year: "numeric",
+    }).formatToParts(d);
+    const day = parts.find((p) => p.type === "day")?.value || "";
+    const month = parts.find((p) => p.type === "month")?.value || "";
+    const year = parts.find((p) => p.type === "year")?.value || "";
+    return `${day}/${month}/${year}`;
+  } catch (e) {
+    return "";
+  }
 };
