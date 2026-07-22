@@ -97,6 +97,9 @@ db.exec(`
   );
 
   INSERT OR IGNORE INTO nodes (id, alias, status) VALUES ('line_01', 'X-Ray Monitor - Line 01', 'online');
+  // INSERT OR IGNORE INTO nodes (id, alias, status) VALUES ('line_02', 'X-Ray Monitor - Line 02', 'offline');
+  // INSERT OR IGNORE INTO nodes (id, alias, status) VALUES ('line_03', 'X-Ray Monitor - Line 03', 'online');
+  // INSERT OR IGNORE INTO nodes (id, alias, status) VALUES ('line_04', 'X-Ray Monitor - Line 04', 'maintenance');
   INSERT OR IGNORE INTO config (key, value) VALUES ('telegram_chat_id', '${process.env.TELEGRAM_CHAT_ID || ""}');
   INSERT OR IGNORE INTO config (key, value) VALUES ('telegram_bot_token', '${process.env.TELEGRAM_BOT_TOKEN || ""}');
   INSERT OR IGNORE INTO config (key, value) VALUES ('watchdog_timeout_min', '6');
