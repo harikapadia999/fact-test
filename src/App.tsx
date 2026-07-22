@@ -1453,6 +1453,12 @@ export default function App() {
                                 emails: e.target.value,
                               });
                             }}
+                            onKeyDown={(e) => {
+                              e.stopPropagation();
+                            }}
+                            onKeyUp={(e) => {
+                              e.stopPropagation();
+                            }}
                             onBlur={() => {
                               handleSaveEmailSettings(emailSettings);
                             }}

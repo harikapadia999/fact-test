@@ -97,9 +97,6 @@ db.exec(`
   );
 
   INSERT OR IGNORE INTO nodes (id, alias, status) VALUES ('line_01', 'X-Ray Monitor - Line 01', 'online');
-  INSERT OR IGNORE INTO nodes (id, alias, status) VALUES ('line_02', 'X-Ray Monitor - Line 02', 'offline');
-  INSERT OR IGNORE INTO nodes (id, alias, status) VALUES ('line_03', 'X-Ray Monitor - Line 03', 'online');
-  INSERT OR IGNORE INTO nodes (id, alias, status) VALUES ('line_04', 'X-Ray Monitor - Line 04', 'maintenance');
   INSERT OR IGNORE INTO config (key, value) VALUES ('telegram_chat_id', '${process.env.TELEGRAM_CHAT_ID || ""}');
   INSERT OR IGNORE INTO config (key, value) VALUES ('telegram_bot_token', '${process.env.TELEGRAM_BOT_TOKEN || ""}');
   INSERT OR IGNORE INTO config (key, value) VALUES ('watchdog_timeout_min', '6');
@@ -1343,24 +1340,27 @@ function setupCronJob() {
 }
 
 function formatDurationHHMMSS(minutes: number) {
-  const hrs = Math.floor(minutes / 60);
-  const mins = Math.floor(minutes % 60);
-  const secs = Math.floor((minutes * 60) % 60);
+  if (!minutes || minutes <= 0) return "00:00:00";
+  const totalSeconds = Math.round(minutes * 60);
+  const hrs = Math.floor(totalSeconds / 3600);
+  const mins = Math.floor((totalSeconds % 3600) / 60);
+  const secs = totalSeconds % 60;
   return `${hrs.toString().padStart(2, "0")}:${mins.toString().padStart(2, "0")}:${secs.toString().padStart(2, "0")}`;
 }
 
 function formatDurationInWords(minutes: number) {
-  const hrs = Math.floor(minutes / 60);
-  const mins = Math.floor(minutes % 60);
-  const secs = Math.floor((minutes * 60) % 60);
+  if (!minutes || minutes <= 0) return "0 seconds";
+  const totalSeconds = Math.round(minutes * 60);
+  const hrs = Math.floor(totalSeconds / 3600);
+  const mins = Math.floor((totalSeconds % 3600) / 60);
+  const secs = totalSeconds % 60;
 
   const parts = [];
   if (hrs > 0) parts.push(`${hrs} hour${hrs !== 1 ? "s" : ""}`);
   if (mins > 0) parts.push(`${mins} minute${mins !== 1 ? "s" : ""}`);
-  if (secs > 0 || (hrs === 0 && mins === 0))
-    parts.push(`${secs} second${secs !== 1 ? "s" : ""}`);
+  if (secs > 0) parts.push(`${secs} second${secs !== 1 ? "s" : ""}`);
 
-  return parts.join(" ");
+  return parts.join(" ") || "0 seconds";
 }
 
 async function sendDailyReportEmail(settings: any, isTest: boolean = false) {
@@ -1451,6 +1451,7 @@ async function sendDailyReportEmail(settings: any, isTest: boolean = false) {
   let dailyReportData: any = {};
   let monthlyReportData: any = {};
   let hasData = false;
+  let hasDailyData = false;
 
   for (const node of nodes) {
     const dailyLogs = db
@@ -1463,6 +1464,7 @@ async function sendDailyReportEmail(settings: any, isTest: boolean = false) {
       logs: dailyLogs,
     };
     if (dailyLogs.length > 0) {
+      hasDailyData = true;
       hasData = true;
     }
 
@@ -1493,7 +1495,7 @@ async function sendDailyReportEmail(settings: any, isTest: boolean = false) {
 
   // If sending a test email and there is no telemetry for the computed date,
   // automatically fall back to the most recent day with telemetry data to guarantee an Excel attachment.
-  if (!hasData && isTest) {
+  if (!hasDailyData && isTest) {
     // If absolutely no telemetry exists in the database, insert a dummy entry so we have something to attach!
     const telemetryCountObj = db
       .prepare("SELECT COUNT(*) as count FROM telemetry")
@@ -1548,6 +1550,8 @@ async function sendDailyReportEmail(settings: any, isTest: boolean = false) {
 
       dailyReportData = {};
       monthlyReportData = {};
+      hasData = false;
+      hasDailyData = false;
       for (const node of nodes) {
         const dailyLogs = db
           .prepare(
@@ -1559,6 +1563,7 @@ async function sendDailyReportEmail(settings: any, isTest: boolean = false) {
           logs: dailyLogs,
         };
         if (dailyLogs.length > 0) {
+          hasDailyData = true;
           hasData = true;
         }
 
