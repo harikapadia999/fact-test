@@ -1455,7 +1455,7 @@ async function sendDailyReportEmail(settings: any, isTest: boolean = false) {
   for (const node of nodes) {
     const dailyLogs = db
       .prepare(
-        "SELECT * FROM telemetry WHERE device_id = ? AND on_time >= ? AND on_time <= ? ORDER BY on_time DESC"
+        "SELECT * FROM telemetry WHERE device_id = ? AND on_time >= ? AND on_time <= ? ORDER BY on_time ASC"
       )
       .all(node.id, startOfDay, endOfDay) as any[];
     dailyReportData[node.id] = {
@@ -1551,7 +1551,7 @@ async function sendDailyReportEmail(settings: any, isTest: boolean = false) {
       for (const node of nodes) {
         const dailyLogs = db
           .prepare(
-            "SELECT * FROM telemetry WHERE device_id = ? AND on_time >= ? AND on_time <= ? ORDER BY on_time DESC"
+            "SELECT * FROM telemetry WHERE device_id = ? AND on_time >= ? AND on_time <= ? ORDER BY on_time ASC"
           )
           .all(node.id, startOfDay, endOfDay) as any[];
         dailyReportData[node.id] = {

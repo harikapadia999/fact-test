@@ -1448,12 +1448,13 @@ export default function App() {
                             type="text"
                             value={emailSettings.emails || ""}
                             onChange={(e) => {
-                              const newSettings = {
+                              setEmailSettings({
                                 ...emailSettings,
                                 emails: e.target.value,
-                              };
-                              setEmailSettings(newSettings);
-                              handleSaveEmailSettings(newSettings);
+                              });
+                            }}
+                            onBlur={() => {
+                              handleSaveEmailSettings(emailSettings);
                             }}
                             className="w-full px-4 py-3 bg-slate-50 border border-slate-100 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20"
                           />
@@ -1486,12 +1487,13 @@ export default function App() {
                               value={emailSettings.smtp_host || ""}
                               placeholder="e.g., smtp.gmail.com"
                               onChange={(e) => {
-                                const newSettings = {
+                                setEmailSettings({
                                   ...emailSettings,
                                   smtp_host: e.target.value,
-                                };
-                                setEmailSettings(newSettings);
-                                handleSaveEmailSettings(newSettings);
+                                });
+                              }}
+                              onBlur={() => {
+                                handleSaveEmailSettings(emailSettings);
                               }}
                               className="w-full px-4 py-3 bg-slate-50 border border-slate-100 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20"
                             />
@@ -1505,12 +1507,14 @@ export default function App() {
                               value={emailSettings.smtp_port || 587}
                               placeholder="587"
                               onChange={(e) => {
-                                const newSettings = {
+                                setEmailSettings({
                                   ...emailSettings,
-                                  smtp_port: parseInt(e.target.value, 10),
-                                };
-                                setEmailSettings(newSettings);
-                                handleSaveEmailSettings(newSettings);
+                                  smtp_port:
+                                    parseInt(e.target.value, 10) || 587,
+                                });
+                              }}
+                              onBlur={() => {
+                                handleSaveEmailSettings(emailSettings);
                               }}
                               className="w-full px-4 py-3 bg-slate-50 border border-slate-100 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20"
                             />
@@ -1526,12 +1530,13 @@ export default function App() {
                               value={emailSettings.smtp_user || ""}
                               placeholder="e.g., yourname@gmail.com"
                               onChange={(e) => {
-                                const newSettings = {
+                                setEmailSettings({
                                   ...emailSettings,
                                   smtp_user: e.target.value,
-                                };
-                                setEmailSettings(newSettings);
-                                handleSaveEmailSettings(newSettings);
+                                });
+                              }}
+                              onBlur={() => {
+                                handleSaveEmailSettings(emailSettings);
                               }}
                               className="w-full px-4 py-3 bg-slate-50 border border-slate-100 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20"
                             />
@@ -1545,12 +1550,13 @@ export default function App() {
                               value={emailSettings.smtp_pass || ""}
                               placeholder="16-character App Password"
                               onChange={(e) => {
-                                const newSettings = {
+                                setEmailSettings({
                                   ...emailSettings,
                                   smtp_pass: e.target.value,
-                                };
-                                setEmailSettings(newSettings);
-                                handleSaveEmailSettings(newSettings);
+                                });
+                              }}
+                              onBlur={() => {
+                                handleSaveEmailSettings(emailSettings);
                               }}
                               className="w-full px-4 py-3 bg-slate-50 border border-slate-100 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20"
                             />
